@@ -48,6 +48,8 @@ thiserror = "2.0"
 toml = "1.0"
 tracing = "0.1"
 trybuild = "1.0"
+unicode-casefold = "0.2"
+unicode-normalization = "0.1"
 uuid = "1.18"
 windows-sys = { version = "0.61", default-features = false }
 zeroize = "1.8"

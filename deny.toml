@@ -12,7 +12,11 @@ ignore = []
 [licenses]
 allow = [
     "Apache-2.0",
+    # Reviewed transitive dependencies use this OSI-approved permissive license.
+    "BSD-2-Clause",
     "MIT",
+    # Unicode data tables use this OSI-approved permissive license.
+    "Unicode-3.0",
 ]
 confidence-threshold = 0.93
 exceptions = []
