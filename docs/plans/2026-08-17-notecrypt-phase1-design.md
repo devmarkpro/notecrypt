@@ -5,6 +5,7 @@
 Approved for implementation planning on 2026-08-17.
 Security and architecture preflight corrections were incorporated on 2026-08-17 before Task 2 began.
 The unanimous contract re-review corrections were incorporated on 2026-08-17 before Task 2 began.
+The non-forgeable capability and bounded-tooling corrections were incorporated on 2026-08-18 before Task 2 began.
 
 ## Product Summary
 
@@ -343,6 +344,8 @@ Wire algorithm identifiers are `0x0001` for XChaCha20-Poly1305, `0x0002` for key
 Outer AEAD AAD contains only public envelope fields in this order: profile identifier, vault identifier, object kind, format version, object identifier, nonce, and ciphertext length.
 A field may be included only when the public envelope or an already authenticated parent reference makes it available.
 Logical file and revision identifiers, snapshot parents and device identifiers, tree entry counts, chunk counts, total plaintext lengths, content sequence, KDF policy semantics, provider references, and all other protected structure remain inside ciphertext.
+The content-chunk public envelope contains only its object ID, fresh random 24-byte nonce, ciphertext length, wrapped-key envelope when applicable, ciphertext, and tag.
+Chunk sequence and plaintext length are fields of the encrypted payload, and profile 1 exposes no additional nonce metadata.
 After successful authenticated decryption, the store validates every protected semantic against authenticated parent references, expected object kind, and profile bounds before returning a typed value.
 
 | Durable kind | Construction and key domain | Nonce | Canonical AAD or MAC coverage | Authenticator and size limit |
@@ -359,7 +362,8 @@ After successful authenticated decryption, the store validates every protected s
 | Same-position chunk fingerprint, profile `0x0001` | Keyed BLAKE3 `0x0003` with HKDF domain `notecrypt/chunk-fingerprint/v1` | None | File ID, checked chunk position, plaintext length, and plaintext bytes | 32-byte fingerprint; input is one bounded content chunk |
 | Local-state record, profile `0x0001` | Keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/local-verification/v1` and a distinct label for trusted head, trusted remote, backend copy, cleanup, or device slot | None | Crypto profile, local-state version, vault ID, record type, record ID, payload length, and complete canonical payload | 32-byte MAC; at most 64 KiB encoded record bytes |
 
-`notecrypt-crypto` defines a distinct typed public context and typed plaintext or authenticated value for every profile row plus exact encrypt, decrypt, MAC, and verify operations.
+`notecrypt-crypto` defines distinct typed public contexts and typed plaintext or authenticated values for every non-streaming profile row plus exact encrypt, decrypt, MAC, and verify operations.
+The bounded chunk fingerprint, key-wrap, and content-chunk operations belong to the Task 4 streaming module.
 The context constructors accept only public envelope fields and authenticated parent references and cannot accept protected semantics as outer AAD.
 Cross-format cryptographic integration tests live in a neutral test package that depends on format and crypto, while format package tests remain structural and canonical only.
 Wire tests prove that protected identifiers, graph shape, entry counts, chunk structure, and per-file semantics never appear in public bytes.
@@ -548,13 +552,16 @@ Every method checks the session generation before and after one bounded object o
 Imported bytes remain in quarantine until their kind, profile, canonical encoding, authentication, references, and declared lengths validate.
 Cancellation, timeout, authentication failure, or any limit failure removes the operation's quarantine data before returning.
 
-Successful bounded traversal returns one opaque `VerifiedReachableHead` that is non-cloneable, non-serializable, and consumable exactly once.
+Successful bounded traversal returns one store-owned opaque `VerifiedReachableHead` with private binding state, no public constructor, and no implementation of clone, serialization, formatting, or default construction.
 It binds the vault ID, session generation, authenticated bootstrap and head identities, every reachable snapshot and object identity, effective limit profile, operation ID, and exact backend observation.
 The store represents that observation through bounded canonical bytes in `BackendObservationFingerprint`, never a backend-owned type.
-`commit_replicated_snapshot` consumes `VerifiedReachableHead` and returns `CommittedReachableHead` only after a fast-forward or reconciled local commit.
+Only store-internal verification may construct the token, including in tests through a development-only store test-support seam that runs the same binding and verification logic.
+`commit_replicated_snapshot` consumes `VerifiedReachableHead` and returns an equally private store-owned `CommittedReachableHead` only after a fast-forward or reconciled local commit.
 No-change and already-current paths consume the proof through an explicit no-local-commit transition that also returns `CommittedReachableHead`.
 `record_trusted_remote` consumes `CommittedReachableHead` and atomically records the matching observation.
 Revocation, a changed effective limit profile, a different observation, partial traversal, or reuse invalidates the transition and cannot advance local or trusted-remote state.
+Compile-fail tests prove external code cannot construct, clone, serialize, or debug-format either token, while runtime tests prove reuse and every binding mismatch fail closed.
+The store keeps one-time transition state keyed by the bound operation so a scripted internal replay attempt is rejected even though external code cannot duplicate a token value.
 
 Replication budget profile 1 applies the stricter of these limits, backend-advertised limits, and local available-space limits.
 
@@ -585,9 +592,10 @@ Every invocation sets `core.hooksPath` to an empty trusted Notecrypt-owned direc
 Internal publication uses `push --no-verify` so user or repository hooks cannot execute inside the trusted process.
 The runner removes every inherited `GIT_*` variable.
 It then sets only Notecrypt-controlled `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_TERMINAL_PROMPT`, `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_GLOBAL`, and `GIT_PAGER` values needed for neutral commits, explicit prompt policy, isolated configuration, and non-paged output.
-For HTTPS, it resolves only the trusted Git-shipped HTTPS helper beneath the canonical trusted exec path belonging to the selected Git installation.
+For HTTPS, it resolves only the canonical allowlisted Git-shipped HTTPS helper beneath the trusted exec path belonging to the selected Git installation.
 For SSH, it invokes one explicitly approved canonical SSH executable with controlled arguments and imports only the approved SSH agent connection needed for that operation.
-For credential storage, it imports exactly one selected trusted credential provider into a generated isolated configuration and rejects repository-controlled credential keys or substitutions.
+For credential storage, it imports exactly one canonical allowlisted selected trusted credential provider into a generated isolated configuration.
+Every other helper or provider is rejected, including non-allowlisted, repository-controlled, path-substituted, and remote-scheme-selected helpers.
 It rejects local `include` and `includeIf` directives, aliases, filters, submodule configuration, pager configuration, replace references, repository-controlled credential commands, custom SSH commands, exec-path substitutions, environment substitutions, and unrecognized remote-helper schemes.
 Protocol policy defaults to deny, explicitly permits configured HTTPS and SSH remotes, and exposes local `file` transport only through a separate local or test capability that cannot be selected by remote configuration.
 The runner rejects `ext`, unknown URL schemes, symlinked Git control files, and repository modes other than regular files, directories, and the exact allowed encrypted paths.
@@ -595,8 +603,13 @@ Before every operation it validates the repository marker, canonical absolute Gi
 Git credentials remain under the user's Git credential configuration and are not copied into vault configuration.
 
 Every candidate fetch and ancestry verification receives `GitVerificationLimits` before Git starts.
-Profile 1 permits at most 1 TiB of raw downloaded pack bytes, 1 TiB of quarantine disk or 80 percent of starting free space when smaller, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, 30 minutes wall-clock time, and 30 seconds without bounded progress while preserving a 1 GiB free-space reserve.
-The adapter monitors the isolated quarantine and complete Git process tree during execution, terminates the process tree on cancellation or any breach, and removes quarantine on every failure.
+Profile 1 permits at most 1 TiB of raw downloaded pack bytes, 256 MiB for one inflated object, 1 TiB of aggregate expanded bytes further reduced by available space and operation limits, 1 TiB of quarantine disk or 80 percent of starting free space when smaller, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, delta depth 50, 1 GiB aggregate process-tree RSS, 1.5 GiB per-process address space, 8 processes, 2 threads per process, 3,600 seconds aggregate process-tree CPU, 30 minutes wall-clock time, and 30 seconds without bounded progress while preserving a 1 GiB free-space reserve.
+Git resource knobs reduce worker, thread, pack-window, and delta depth before ingestion begins.
+Linux uses a dedicated cgroup with `cpu.stat` `usage_usec`, `cpu.max` capped at two cores, memory and process limits, plus a per-process address-space limit, and an `RLIMIT` plus watchdog fallback only when the same complete child-tree accounting is proven.
+Windows uses one Job Object with per-job user-time, CPU rate control, memory, process, and child-assignment enforcement plus watchdog accounting for each process's virtual address space.
+macOS uses a process group with a 50 ms watchdog that sums process-group CPU and RSS, with `RLIMIT_CPU` and address-space limits as secondary controls.
+The adapter fails closed before Git starts when complete child-tree attachment or accounting is unavailable on the active platform.
+It monitors the isolated quarantine and complete Git process tree throughout execution, terminates the whole tree on cancellation or any breach, and removes quarantine on every failure.
 Replication limits run after unpacking as a second independent bound before authenticated graph acceptance and do not substitute for pack-ingestion limits.
 
 Synchronization performs fetch, authenticates reachable Notecrypt objects, reconciles snapshots if required, creates a Git tree and commit from a validated encrypted-file inventory using plumbing commands, and performs a normal fast-forward push from a private temporary ref.
@@ -614,7 +627,8 @@ If the remote may have accepted a push but the response or verification read fai
 Onboarding installs managed defense-in-depth hooks that reject known plaintext workspaces and unexpected files.
 Hooks are not the confidentiality boundary because users and tools can bypass them.
 `notecrypt vault backup` independently validates the encrypted layout before committing or pushing.
-Tests inject hostile hooks, configuration includes, SSH commands, remote helpers, pagers, `GIT_*` variables, replace objects, filters, missing blobs, corrupt objects, false committed outcomes, and false readback.
+Tests inject hostile hooks, configuration includes, SSH commands, non-allowlisted helpers and providers, pagers, `GIT_*` variables, replace objects, filters, missing blobs, corrupt objects, false committed outcomes, and false readback.
+Adversarial ingestion tests cross each pack, inflated-object, aggregate-expanded-byte, quarantine, object, commit, ancestry, delta, RSS, address-space, process, thread, aggregate CPU, wall, progress, and free-space boundary and prove escaped children or unavailable accounting fail closed with whole-tree termination and quarantine cleanup.
 
 ## Application Service Contract
 
@@ -624,6 +638,11 @@ The handle provides non-blocking progress polling, explicit cancellation, and a 
 Ordinary commands use a bounded work queue.
 Explicit lock, deadline expiry, operating-system suspend, cancellation, and trusted user activity use a separate non-rejectable control path that is processed before ordinary work.
 The TUI reports local keyboard and navigation activity through a coalesced trusted-activity signal.
+Recovery secret presentation and every pending security transition use private-field, service-owned, generation-bound linear capabilities with crate-private constructors.
+`RecoverySecretPresentation` owns a zeroizing payload or an opaque identifier tied to zeroizing service state, exposes only consuming `present_once`, and zeroizes on drop.
+`PendingRecoveryInitialization`, `PendingCompromiseRekey`, and `PendingFreshnessAcknowledgement` cannot be forged, cloned, formatted, serialized, or embedded in ordinary DTOs, events, snapshots, JSON, or logs.
+Compromise rekey begins through a dedicated service method that returns `PendingCompromiseRekey` plus its one-time recovery presentation, then requires consuming confirmation with `RecoverySecretInput` or consuming cancellation before target activation.
+Freshness acknowledgement begins only after graph authentication and returns a safe explanatory DTO plus `PendingFreshnessAcknowledgement`, then requires consuming acknowledge or cancel, while drop fails closed without recording a baseline.
 
 Events include:
 
@@ -856,7 +875,8 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 
 ### Security tests
 
-- Keep a checked-in manifest enumerating every durable decoder and cryptographic envelope; bootstrap, head, inventory, and backend response parser; Git remote URL, configuration, commit, tree, ref, and output parser; and replication graph-metadata and limit parser.
+- Keep one root checked-in manifest as the sole inventory of every durable decoder and cryptographic envelope; bootstrap, head, inventory, and backend response parser; Git remote URL, configuration, commit, tree, ref, and output parser; and replication graph-metadata and limit parser.
+- Give each format, backend, Git, and replication fuzz tree its own `Cargo.toml`, assign each target exactly once, and pin every script, CI job, scheduled run, and release gate to `nightly-2026-08-01` with `cargo-fuzz` `0.13.1` after exact-version verification.
 - Verify manifest-to-target completeness in CI and run every target for at least 10 seconds on each change.
 - Run scheduled Linux sanitizer campaigns for at least 30 minutes per target with retained corpora and run every target for at least 10 minutes plus full regression-corpus replay during release verification.
 - Persist every crashing input as an ordinary deterministic regression fixture.
