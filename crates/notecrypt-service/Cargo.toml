@@ -1,0 +1,15 @@
+[package]
+name = "notecrypt-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+notecrypt-crypto.workspace = true
+notecrypt-replication.workspace = true
+notecrypt-store.workspace = true
+
+[lints]
+workspace = true

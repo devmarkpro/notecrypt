@@ -1,0 +1,1 @@
+//! Cryptographic composition for Notecrypt.
