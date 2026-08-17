@@ -21,6 +21,7 @@ The CLI and TUI consume one in-process service facade whose worker model keeps a
 - File processing must stream through bounded buffers and remain bounded in memory for 10 GiB inputs.
 - Every durable decoder must reject malformed, oversized, unsupported, non-canonical, reordered, duplicated, and truncated input.
 - Cryptographic profile 1, Argon2id profile 1, custom-passphrase policy 1, and replication budget profile 1 use the exact identifiers, limits, AAD, MAC, and key domains in the design specification.
+- Outer AEAD AAD contains only allowed public envelope fields, while protected identities, graph shape, counts, sequence, and plaintext lengths remain encrypted and are checked after decryption.
 - Any CSPRNG failure is fatal to the operation and publishes no state.
 - Generated 128-bit recovery phrases are the default, and custom recovery passphrases require the explicit versioned warning and confirmation path.
 - Whole-stream operations must not retain raw key references between chunks, and lock revocation must be checked before and after every bounded chunk.
@@ -31,6 +32,9 @@ The CLI and TUI consume one in-process service facade whose worker model keeps a
 - Replication must use the object-safe revocable store lease and enforce per-kind, aggregate-byte, object-count, graph-depth, timeout, progress, and quarantine-disk budgets.
 - Plaintext cleanup accepts only random workspace identities below the fixed Notecrypt-owned base and follows reserve, register, activate, remove, and unregister ownership ordering.
 - Every internal Git operation uses the hardened runner and verifies fetched candidate history plus the complete authenticated graph before trust advances.
+- Reachability, replicated commit, trusted-remote recording, and compromise rekey use non-cloneable one-time capabilities that cannot be replayed across observations, limits, sessions, operations, or targets.
+- Live plaintext workspaces are protected by OS-backed base and per-workspace ownership locks, and cleanup never deletes a workspace whose ownership lock is held.
+- Clean-device recovery requires an explicit `FreshnessUnprovable` acknowledgement before the first trusted baseline is recorded.
 - Phase 1 supports regular files and directories only.
 - Durable format, snapshot layout, backend SPI, and CLI JSON versions evolve independently.
 - No public API may expose Tokio, Git implementation, `anyhow`, serializer, or cryptographic-library types.
@@ -40,8 +44,8 @@ The CLI and TUI consume one in-process service facade whose worker model keeps a
 ## Delivery Checkpoints
 
 - Checkpoint A after Task 15 is a runnable local vault with CLI, TUI, passphrase unlock, targeted editing, lock, and reopen.
-- Checkpoint B after Task 17 adds arbitrary-file whole-vault sessions, budgeted authenticated replication, deterministic conflict reconciliation, `BackendCopy`, and `CompromiseRekey` service behavior.
-- Checkpoint C after Task 19 adds hardened Git synchronization, verified backup, device-local unlock, and the explicit CLI and TUI presentation-integration gate.
+- Checkpoint B after Task 17 adds arbitrary-file whole-vault sessions, linear budgeted authenticated replication, deterministic conflict reconciliation, and in-memory `BackendCopy` and `CompromiseRekey` state-machine proof.
+- Checkpoint C after Task 19 adds hardened Git synchronization, production Git `BackendCopy` and `CompromiseRekey` journeys, verified backup, freshness acknowledgement, device-local unlock, and the explicit CLI and TUI presentation-integration gate.
 - Checkpoint D after Task 21 is the hardened phase 1 release candidate.
 
 ## Specification Traceability
@@ -51,16 +55,16 @@ The CLI and TUI consume one in-process service facade whose worker model keeps a
 | Workspace boundaries and dependency rules | 1, 20 |
 | Domain identities, logical tree, tombstones, and conflicts | 2, 17 |
 | Key hierarchy, generated recovery, KDF bounds, compromise rekey, and authenticated chunks | 3, 4, 10, 14, 15, 17, 20 |
-| Durable cryptographic profiles, formats, and independent versioning | 3, 4, 5, 6, 20 |
+| Confidential durable cryptographic profiles, typed APIs, formats, and independent versioning | 3, 4, 5, 6, 20 |
 | Crash-consistent local transactions, cleanup ownership, and rollback detection | 6, 9, 12, 16, 20 |
-| Portable backend SPI, immutable bootstrap, `BackendCopy`, and `CompromiseRekey` | 7, 10, 17, 18, 20 |
+| Portable backend SPI, immutable bootstrap, linear `BackendCopy`, and `CompromiseRekey` | 6, 7, 10, 17, 18, 20 |
 | Runtime-neutral service, sessions, progress, cancellation, and lock | 8, 9, 10, 11, 13, 16 |
 | Complete local application use cases | 10, 11 |
 | Targeted editing, stable sources, revocation, and local plaintext minimization | 6, 9, 12, 13, 20 |
 | Complete CLI and polished TUI | 10, 14, 15, 16, 17, 18, 19, 20 |
 | Whole-vault autosave and filesystem safety | 9, 12, 16, 20 |
 | Budgeted authenticated synchronization and conflict preservation | 6, 7, 17, 20 |
-| Hardened Git onboarding, history verification, synchronization, and backup | 7, 18, 20 |
+| Hardened functional Git authentication, bounded ingestion, history verification, synchronization, and backup | 7, 18, 20, 21 |
 | Native device unlock, removal, and recovery fallback | 19, 20 |
 | Security, recovery, fuzzing, canary, and platform evidence | 20 |
 | Performance budgets and regression protection | 1, 4, 6, 13, 14, 15, 21 |
@@ -81,7 +85,7 @@ crates/notecrypt-store/src/{lib.rs,error.rs,layout.rs,repository.rs,journal.rs,t
 crates/notecrypt-backend/src/{lib.rs,error.rs,types.rs,bootstrap.rs,backend.rs,conformance.rs}
 crates/notecrypt-replication/src/{lib.rs,error.rs,limits.rs,plan.rs,reconcile.rs,sync.rs,migration.rs,compromise_rekey.rs}
 crates/notecrypt-service/src/{lib.rs,command.rs,error.rs,event.rs,operation.rs,ports.rs,session.rs,service.rs,local_use_cases.rs}
-adapters/notecrypt-backend-git/src/{lib.rs,error.rs,runner.rs,repository.rs,backend.rs,hooks.rs,quarantine.rs,verify.rs}
+adapters/notecrypt-backend-git/src/{lib.rs,error.rs,runner.rs,repository.rs,backend.rs,hooks.rs,auth.rs,limits.rs,quarantine.rs,verify.rs}
 adapters/notecrypt-device-unlock/src/{lib.rs,error.rs,native.rs}
 adapters/notecrypt-editor-workspace/src/{lib.rs,error.rs,editor.rs,permissions.rs,workspace.rs,watcher.rs}
 ui/notecrypt-tui/src/{lib.rs,app.rs,event_loop.rs,keymap.rs,view_model.rs,widgets.rs,dialogs.rs}
@@ -89,6 +93,10 @@ apps/notecrypt-cli/src/{main.rs,args.rs,config.rs,commands.rs,output.rs,password
 tests/notecrypt-e2e/Cargo.toml
 tests/notecrypt-e2e/src/{lib.rs,workspace_policy.rs,test_editor.rs}
 tests/notecrypt-e2e/tests/{local_facade.rs,local_vault.rs,cli_journey.rs,tui_journey.rs,whole_vault.rs,git_sync.rs,presentation_journey.rs,recovery_journey.rs,plaintext_canary.rs,crash_recovery.rs}
+tests/notecrypt-crypto-format/{Cargo.toml,src/lib.rs,tests/profile_integration.rs,tests/public_wire.rs}
+fuzz/targets.toml
+scripts/verify-fuzz-targets.sh
+scripts/run-fuzz-manifest.sh
 benches/src/{lib.rs,corpus.rs,crypto.rs,store.rs,targeted_edit.rs,tui_latency.rs}
 benches/baselines/chunk-size-v1.json
 docs/decisions/{0001-rust-core-and-ui.md,0002-encrypted-object-format.md,0003-chunk-reuse-leakage.md,0004-backend-contract.md}
@@ -282,6 +290,10 @@ Commit: `feat(core): add vault tree and deterministic reconciliation`
 - Modify: `Cargo.toml`
 - Modify: `Cargo.lock`
 - Modify: `crates/notecrypt-crypto/Cargo.toml`
+- Create: `tests/notecrypt-crypto-format/Cargo.toml`
+- Create: `tests/notecrypt-crypto-format/src/lib.rs`
+- Create: `tests/notecrypt-crypto-format/tests/profile_integration.rs`
+- Create: `tests/notecrypt-crypto-format/tests/public_wire.rs`
 - Create: `crates/notecrypt-crypto/src/error.rs`
 - Create: `crates/notecrypt-crypto/src/secret.rs`
 - Create: `crates/notecrypt-crypto/src/recovery.rs`
@@ -295,7 +307,7 @@ Commit: `feat(core): add vault tree and deterministic reconciliation`
 **Interfaces:**
 
 - Produces: non-formatting secret key types.
-- Produces: 128-bit generated recovery phrases, custom-passphrase policy version 1, strictly bounded Argon2id profile 1, and Vault Root Key wrapping.
+- Produces: 128-bit generated recovery phrases, custom-passphrase policy version 1, strictly bounded Argon2id profile 1, Vault Root Key wrapping, and exact typed crypto operations for every profile row.
 
 - [ ] **Step 1: Write compile-fail and domain-separation tests**
 
@@ -358,6 +370,58 @@ pub fn validate_custom_passphrase(
     policy: CustomPassphrasePolicy,
 ) -> Result<RecoveryPassphrase, CryptoError>;
 
+pub struct PublicEnvelopeIdentity {
+    pub profile_id: u16,
+    pub vault_id: [u8; 16],
+    pub object_kind: u8,
+    pub format_version: u16,
+    pub object_id: [u8; 32],
+}
+
+pub struct RecoverySlotContext(PublicEnvelopeIdentity);
+pub struct DeviceSlotContext(PublicEnvelopeIdentity);
+pub struct MetadataContext(PublicEnvelopeIdentity);
+pub struct TreeContext(PublicEnvelopeIdentity);
+pub struct ManifestContext(PublicEnvelopeIdentity);
+pub struct SnapshotContext(PublicEnvelopeIdentity);
+pub struct ChunkKeyWrapContext(PublicEnvelopeIdentity);
+pub struct ContentChunkContext(PublicEnvelopeIdentity);
+pub struct AuthenticatedHeadContext(PublicEnvelopeIdentity);
+pub struct LocalStateContext(PublicEnvelopeIdentity);
+pub struct ChunkFingerprintContext;
+
+pub struct RecoverySlotPlaintext(Vec<u8>);
+pub struct DeviceSlotPlaintext(Vec<u8>);
+pub struct MetadataPlaintext(Vec<u8>);
+pub struct TreePlaintext(Vec<u8>);
+pub struct ManifestPlaintext(Vec<u8>);
+pub struct SnapshotPlaintext(Vec<u8>);
+pub struct ChunkKeyPlaintext(secrecy::SecretBox<[u8; 32]>);
+pub struct ContentChunkPlaintext(Vec<u8>);
+
+pub fn encrypt_recovery_slot(context: &RecoverySlotContext, value: RecoverySlotPlaintext, key: &RecoveryWrappingKey, random: &mut dyn SecureRandom) -> Result<RecoverySlotEnvelope, CryptoError>;
+pub fn decrypt_recovery_slot(context: &RecoverySlotContext, envelope: &RecoverySlotEnvelope, key: &RecoveryWrappingKey) -> Result<RecoverySlotPlaintext, CryptoError>;
+pub fn encrypt_device_slot(context: &DeviceSlotContext, value: DeviceSlotPlaintext, key: &DeviceWrappingKey, random: &mut dyn SecureRandom) -> Result<DeviceSlotEnvelope, CryptoError>;
+pub fn decrypt_device_slot(context: &DeviceSlotContext, envelope: &DeviceSlotEnvelope, key: &DeviceWrappingKey) -> Result<DeviceSlotPlaintext, CryptoError>;
+pub fn encrypt_metadata(context: &MetadataContext, value: MetadataPlaintext, key: &MetadataKey, random: &mut dyn SecureRandom) -> Result<MetadataEnvelope, CryptoError>;
+pub fn decrypt_metadata(context: &MetadataContext, envelope: &MetadataEnvelope, key: &MetadataKey) -> Result<MetadataPlaintext, CryptoError>;
+pub fn encrypt_tree(context: &TreeContext, value: TreePlaintext, key: &MetadataKey, random: &mut dyn SecureRandom) -> Result<TreeEnvelope, CryptoError>;
+pub fn decrypt_tree(context: &TreeContext, envelope: &TreeEnvelope, key: &MetadataKey) -> Result<TreePlaintext, CryptoError>;
+pub fn encrypt_manifest(context: &ManifestContext, value: ManifestPlaintext, key: &MetadataKey, random: &mut dyn SecureRandom) -> Result<ManifestEnvelope, CryptoError>;
+pub fn decrypt_manifest(context: &ManifestContext, envelope: &ManifestEnvelope, key: &MetadataKey) -> Result<ManifestPlaintext, CryptoError>;
+pub fn encrypt_snapshot(context: &SnapshotContext, value: SnapshotPlaintext, metadata_key: &MetadataKey, authentication_key: &SnapshotAuthenticationKey, random: &mut dyn SecureRandom) -> Result<SnapshotEnvelope, CryptoError>;
+pub fn decrypt_snapshot(context: &SnapshotContext, envelope: &SnapshotEnvelope, metadata_key: &MetadataKey, authentication_key: &SnapshotAuthenticationKey) -> Result<SnapshotPlaintext, CryptoError>;
+pub fn wrap_chunk_key(context: &ChunkKeyWrapContext, value: ChunkKeyPlaintext, key: &ContentWrappingKey, random: &mut dyn SecureRandom) -> Result<ChunkKeyEnvelope, CryptoError>;
+pub fn unwrap_chunk_key(context: &ChunkKeyWrapContext, envelope: &ChunkKeyEnvelope, key: &ContentWrappingKey) -> Result<ChunkKeyPlaintext, CryptoError>;
+pub fn encrypt_content_chunk(context: &ContentChunkContext, value: ContentChunkPlaintext, key: &ChunkKeyPlaintext, random: &mut dyn SecureRandom) -> Result<ContentChunkEnvelope, CryptoError>;
+pub fn decrypt_content_chunk(context: &ContentChunkContext, envelope: &ContentChunkEnvelope, key: &ChunkKeyPlaintext) -> Result<ContentChunkPlaintext, CryptoError>;
+pub fn authenticate_head(context: &AuthenticatedHeadContext, canonical_head: &[u8], key: &SnapshotAuthenticationKey) -> Result<HeadAuthenticator, CryptoError>;
+pub fn verify_head(context: &AuthenticatedHeadContext, canonical_head: &[u8], authenticator: &HeadAuthenticator, key: &SnapshotAuthenticationKey) -> Result<(), CryptoError>;
+pub fn authenticate_local_state(context: &LocalStateContext, canonical_record: &[u8], key: &LocalVerificationKey) -> Result<LocalStateAuthenticator, CryptoError>;
+pub fn verify_local_state(context: &LocalStateContext, canonical_record: &[u8], authenticator: &LocalStateAuthenticator, key: &LocalVerificationKey) -> Result<(), CryptoError>;
+pub fn fingerprint_chunk(context: &ChunkFingerprintContext, protected_semantics: &[u8], plaintext: &[u8], key: &ChunkFingerprintKey) -> Result<ChunkFingerprint, CryptoError>;
+pub fn verify_chunk_fingerprint(context: &ChunkFingerprintContext, protected_semantics: &[u8], plaintext: &[u8], expected: &ChunkFingerprint, key: &ChunkFingerprintKey) -> Result<(), CryptoError>;
+
 pub fn calibrate_argon2id(
     target: std::time::Duration,
     cancel: &std::sync::atomic::AtomicBool,
@@ -374,6 +438,10 @@ pub fn derive_vault_keys(root: &VaultRootKey) -> Result<VaultKeys, CryptoError>;
 ```
 
 `generate_recovery_phrase` consumes exactly 128 CSPRNG bits and encodes BIP39 English version 1 as 12 words plus checksum.
+Each context newtype has a checked constructor that accepts only `PublicEnvelopeIdentity` and rejects the wrong object kind or profile.
+Encryption constructs AAD internally from the public identity, generated public nonce, and resulting ciphertext length.
+No context accepts logical file or revision IDs, snapshot parents or device IDs, tree or chunk counts, total plaintext length, sequence, provider reference, or other protected semantics.
+Typed plaintext constructors keep those semantics encrypted, and store conversion validates them against authenticated parent references after decryption.
 Custom policy version 1 accepts 20 through 1,024 UTF-8 bytes, at least five whitespace-delimited words, no NUL, and no implicit normalization.
 Set the profile floor to 65,536 KiB, three iterations, and one lane and the ceiling to 1,048,576 KiB, ten iterations, and sixteen lanes.
 Construct `ValidatedArgon2idParameters` only through checked validation before allocation or integer conversion.
@@ -394,11 +462,18 @@ Wrap the Vault Root Key with XChaCha20-Poly1305 using a random nonce and authent
 Use the exact recovery-slot profile, nonce length, canonical AAD fields, tag length, and size limit from cryptographic profile 1.
 Treat failure to generate the Vault Root Key, salt, slot ID, or nonce as a hard error with no returned bootstrap material.
 
-- [ ] **Step 5: Verify and commit**
+- [ ] **Step 5: Prove cross-format confidentiality and integration**
 
-Run: `cargo test -p notecrypt-crypto`
+Build the neutral `notecrypt-crypto-format-tests` package with dependencies on `notecrypt-format` and `notecrypt-crypto` and no dependency on store or service.
+Round-trip every profile row between canonical format envelopes and the exact typed crypto API.
+Prove cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, modified public AAD, modified ciphertext, and modified authenticator rejection.
+Scan public wire bytes to prove logical file and revision IDs, snapshot parents and device IDs, tree entry counts, chunk counts, total plaintext lengths, content sequence, graph shape, and per-file structure do not appear.
 
-Expected: generated recovery, custom policy, CSPRNG failure, secret compile-fail, KDF floors and ceilings, cancellation boundaries, wrapping, wrong-passphrase, and domain-separation tests pass.
+- [ ] **Step 6: Verify and commit**
+
+Run: `cargo test -p notecrypt-crypto && cargo test -p notecrypt-crypto-format-tests`
+
+Expected: generated recovery, custom policy, CSPRNG failure, secret compile-fail, KDF floors and ceilings, cancellation boundaries, every typed profile API, cross-format rejection, and public-wire confidentiality tests pass.
 
 Commit: `feat(crypto): add passphrase recovery and key hierarchy`
 
@@ -428,18 +503,6 @@ Format and store tests cover revision-manifest reordering, missing chunks, dupli
 - [ ] **Step 2: Implement the bounded streaming API**
 
 ```rust
-pub struct ChunkContext {
-    pub vault_id: [u8; 16],
-    pub file_id: [u8; 16],
-    pub object_id: [u8; 32],
-    pub format_version: u16,
-    pub algorithm_id: u16,
-    pub object_kind: u8,
-    pub nonce_domain: [u8; 16],
-    pub sequence: u64,
-    pub plaintext_bytes: u32,
-}
-
 pub struct EncryptedChunkDescriptor {
     pub object_id: [u8; 32],
     pub fingerprint: [u8; 32],
@@ -452,31 +515,14 @@ pub struct EncryptedChunk {
     pub encoded: Vec<u8>,
 }
 
-pub fn fingerprint_chunk(
-    plaintext: &[u8],
-    context: &ChunkContext,
-    fingerprint_key: &ChunkFingerprintKey,
-) -> Result<[u8; 32], CryptoError>;
-
-pub fn encrypt_chunk(
-    plaintext: &[u8],
-    context: &ChunkContext,
-    wrapping_key: &ContentWrappingKey,
-    random: &mut dyn SecureRandom,
-) -> Result<EncryptedChunk, CryptoError>;
-
-pub fn decrypt_chunk(
-    encoded: &[u8],
-    context: &ChunkContext,
-    wrapping_key: &ContentWrappingKey,
-) -> Result<Vec<u8>, CryptoError>;
 ```
 
-These functions borrow key material for one bounded chunk call only and provide no whole-stream key-bearing API.
+Implement the Task 3 `fingerprint_chunk`, `verify_chunk_fingerprint`, `wrap_chunk_key`, `unwrap_chunk_key`, `encrypt_content_chunk`, and `decrypt_content_chunk` signatures without adding a whole-stream key-bearing API.
+These functions borrow key material for one bounded chunk call only.
 The store owns the reader loop, session-generation checks, descriptor reuse decision, and bounded buffers in Task 6.
-Generate one fresh 16-byte content nonce domain for each newly encrypted file revision and combine it with the checked 64-bit chunk sequence.
-Generate a fresh data key and 24-byte wrapping nonce for every newly encrypted chunk.
+Generate a fresh data key, 24-byte wrapping nonce, and independent 24-byte content nonce for every newly encrypted chunk.
 Use the exact content-chunk, chunk-key-wrapper, and same-position-fingerprint contexts from cryptographic profile 1.
+Keep sequence, file identity, plaintext length, and comparison semantics inside encrypted manifest or chunk plaintext and never encode them in public AAD or a structured public nonce.
 Return keyed fingerprints only to the unlocked store pipeline so it can compare the prior descriptor at the same file position before choosing reuse or fresh encryption.
 Reject plaintext above 4 MiB and keep at most two chunk buffers live per store pipeline.
 Return no descriptor or encoded bytes after a CSPRNG, wrap, encryption, authentication, or length failure.
@@ -525,7 +571,8 @@ Commit: `feat(crypto): add bounded streaming encryption`
 - [ ] **Step 1: Write failing canonical-format tests**
 
 Assert byte-for-byte deterministic encoding, rejection of indefinite collections, duplicate fields, unknown critical fields, trailing bytes, unsupported major versions, oversized collections, and integer overflow.
-Before fixtures freeze, cover every profile row with cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, modified-AAD, modified-MAC, truncated-tag, and unsupported-algorithm tests.
+Keep package tests structural and canonical only, including numeric identifiers, public-field placement, nonce and tag lengths, ciphertext length, bounds, and rejection of protected semantic fields in public envelopes.
+Rely on the neutral Task 3 package for encryption, authentication, and cross-format behavior before fixtures freeze.
 
 - [ ] **Step 2: Define explicit limits**
 
@@ -570,6 +617,8 @@ Use fixed-position arrays with explicit version and object-kind fields.
 Reject non-canonical encodings before constructing domain objects.
 Keep schema records separate from domain types and convert explicitly.
 Encode all AAD and MAC inputs as canonical length-delimited arrays in the exact profile-1 field order from the design.
+For AEAD envelopes expose only profile ID, vault ID, object kind, format version, object ID, nonce, and ciphertext length when applicable.
+Encode logical IDs, graph references, counts, sequence, plaintext lengths, and other protected semantics only inside ciphertext.
 Encode each chunk envelope with its random object identity, nonce domain and sequence, wrapped random data key, plaintext length, ciphertext, and authentication tag.
 Encode each encrypted revision manifest with ordered chunk identities, keyed plaintext fingerprints, per-chunk lengths, and total plaintext length.
 Encode recovery slots, device slots, metadata, trees, manifests, snapshots, authenticated heads, chunk-key wrappers, content chunks, and local-state records with their exact profile identifiers, nonce lengths, tag lengths, and per-kind bounds.
@@ -625,6 +674,8 @@ Commit: `feat(format): define versioned encrypted vault formats`
 - Test: `crates/notecrypt-store/tests/chunk_revocation.rs`
 - Test: `crates/notecrypt-store/tests/cleanup_lifecycle.rs`
 - Test: `crates/notecrypt-store/tests/replication_limits.rs`
+- Test: `crates/notecrypt-store/tests/reachability_tokens.rs`
+- Test: `crates/notecrypt-store/tests/compromise_capabilities.rs`
 - Benchmark: `benches/src/store.rs`
 
 **Interfaces:**
@@ -665,8 +716,8 @@ impl VaultStore {
 }
 
 pub trait VaultRepository: Send + Sync {
-    fn cleanup_owned_workspace_base(&self) -> Result<PreUnlockCleanupReport, StoreError>;
     fn initialize(&self, request: InitializeRepository) -> Result<RepositorySnapshot, StoreError>;
+    fn begin_pending_target(&self, request: BeginPendingVaultTarget) -> Result<Box<dyn PendingVaultTarget>, StoreError>;
     fn unlock(&self, request: UnlockRepository) -> Result<Box<dyn UnlockedVault>, StoreError>;
     fn list_device_slots(&self) -> Result<Vec<LocalDeviceSlotRecord>, StoreError>;
 }
@@ -677,6 +728,7 @@ pub trait UnlockedVault: Send + Sync {
         &self,
         limits: ReplicationLimits,
     ) -> Result<Box<dyn ReplicationLease>, StoreError>;
+    fn acquire_compromise_rekey_source(&self) -> Result<Box<dyn CompromiseRekeySource>, StoreError>;
     fn begin_close(&self);
     fn close(self: Box<Self>) -> Result<(), StoreError>;
 }
@@ -721,12 +773,14 @@ pub trait ReplicationLease: Send {
     fn read_snapshot(&self, id: &ObjectId) -> Result<AuthenticatedSnapshotMetadata, StoreError>;
     fn read_tree(&self, id: &ObjectId) -> Result<AuthenticatedTreeMetadata, StoreError>;
     fn read_manifest(&self, id: &ObjectId) -> Result<AuthenticatedManifestMetadata, StoreError>;
-    fn traverse_reachable(
+    fn verify_reachable(
         &self,
         head: &AuthenticatedHead,
+        observation: BackendObservationFingerprint,
+        operation: ReplicationOperationId,
         visitor: &mut dyn ReachableObjectVisitor,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<ReachabilitySummary, StoreError>;
+    ) -> Result<VerifiedReachableHead, StoreError>;
     fn export_encrypted(
         &self,
         id: &ObjectId,
@@ -735,12 +789,50 @@ pub trait ReplicationLease: Send {
     ) -> Result<u64, StoreError>;
     fn commit_replicated_snapshot(
         &self,
+        verified: VerifiedReachableHead,
         input: CommitReplicatedSnapshot,
-    ) -> Result<RepositorySnapshot, StoreError>;
+    ) -> Result<CommittedReachableHead, StoreError>;
+    fn accept_current_verified(
+        &self,
+        verified: VerifiedReachableHead,
+    ) -> Result<CommittedReachableHead, StoreError>;
     fn record_trusted_remote(
         &self,
-        observation: TrustedRemoteObservation,
+        committed: CommittedReachableHead,
+        provenance: TrustedRemoteProvenance,
     ) -> Result<(), StoreError>;
+}
+
+pub struct BackendObservationFingerprint(Vec<u8>);
+pub struct VerifiedReachableHead;
+pub struct CommittedReachableHead;
+pub struct ReplicationOperationId([u8; 16]);
+
+pub enum TrustedRemoteProvenance {
+    FreshnessProven,
+    FreshnessUnprovableAcknowledged,
+}
+
+pub trait CompromiseRekeySource: Send {
+    fn next_entry(&mut self) -> Result<Option<AuthenticatedLogicalEntry>, StoreError>;
+    fn stream_plaintext(
+        &mut self,
+        entry: &AuthenticatedLogicalEntry,
+        output: &mut dyn std::io::Write,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<u64, StoreError>;
+}
+
+pub trait PendingVaultTarget: Send {
+    fn stage_entry(
+        &mut self,
+        source: &mut dyn std::io::Read,
+        logical_metadata: NewLogicalIdentity,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<StagedTargetEntry, StoreError>;
+    fn verify_complete(&mut self, cancel: &std::sync::atomic::AtomicBool) -> Result<(), StoreError>;
+    fn activate(self: Box<Self>) -> Result<ActivatedVaultTarget, StoreError>;
+    fn abort(self: Box<Self>) -> Result<(), StoreError>;
 }
 
 pub enum ReplicatedCommitMode {
@@ -826,6 +918,12 @@ The store loop checks the session generation, acquires a key guard for one bound
 No raw key borrow survives between chunks, and no chunk completed across a generation change may enter a manifest or published revision.
 `commit_streamed_revision` calls `PublicationGuard::validate` after every staged object authenticates and immediately before it writes the journal that can advance the head.
 Every key-required replication operation is available only through the object-safe `ReplicationLease`.
+Make `VerifiedReachableHead`, `CommittedReachableHead`, `CompromiseRekeySource`, and `PendingVaultTarget` non-cloneable, non-serializable, non-formatting, and bound to the active session generation.
+Bind `VerifiedReachableHead` to the vault, authenticated bootstrap and head, exact reachable identities, effective limits, canonical `BackendObservationFingerprint`, and operation ID.
+Require the consuming sequence `verify_reachable` to either `commit_replicated_snapshot` or `accept_current_verified`, then to consuming `record_trusted_remote`.
+Reject partial traversal, stale generation, changed limits, changed observation, changed operation, duplicate use, or unmatched provenance before local or trusted-remote state changes.
+`PendingVaultTarget` uses a distinct empty target and all-new vault, root, recovery, logical, revision, and object identities, cleans staged state on abort or drop, activates only after complete verification, and cannot be reused after abort or activation.
+Reject source and target aliasing and any old identity, object, parent, or history in target staging.
 Keep all raw `VaultStore` helpers crate-private.
 `enroll_device_slot` performs root-key wrapping, local-record authentication, and atomic persistence inside the store because only that capability may access both the root key and supplied device-wrapping key.
 `begin_close` rejects new leases and makes existing leases fail with `StoreError::Locked` at the next chunk or transaction boundary.
@@ -834,7 +932,8 @@ Set `ReplicationLimits::PHASE_1` to 1 MiB bootstrap, 64 KiB head, 4 MiB plus 4 K
 Apply the strictest store profile, backend capability, and available-space limit for each operation.
 On cancellation, lock, timeout, stalled progress, authentication failure, or any budget failure, remove that operation's quarantine tree before returning.
 Workspace lifecycle is reserve, authenticated register, adapter creation and permission verification, authenticated activate, plaintext use, adapter removal and absence verification, then authenticated unregister.
-At startup `cleanup_owned_workspace_base` enumerates only direct random-ID children below the fixed canonical Notecrypt-owned base without following links and exposes no unlock until safe cleanup finishes successfully.
+At startup `WorkspaceProvider::cleanup_owned_base` holds the OS-backed base coordination lock, enumerates only direct random-ID children below the fixed canonical Notecrypt-owned base without following links, attempts each per-workspace ownership lock non-blockingly, and skips held live workspaces without treating them as failures.
+Cleanup exposes no unlock until every unheld owned workspace is safely removed, while a held live workspace remains protected by its lifetime ownership guard.
 Failure presents a blocking retry-or-exit warning and cannot be acknowledged into an unlocked session.
 
 - [ ] **Step 3: Write a failure test for every transaction boundary**
@@ -869,6 +968,8 @@ Record a trusted remote observation atomically only after the replication lease 
 
 Exercise infinite inventory, trickle reads, every oversized object kind, excessive object count, excessive graph depth, aggregate-byte exhaustion, timeout, disk-budget exhaustion, cancellation, and lock.
 Assert typed referenced-object metadata for successful imports and complete quarantine removal for every failure.
+Exercise partial traversal, stale session, different effective limits, different observation fingerprints, different operation IDs, proof reuse, no-change consumption, commit failure, record failure, and attempted trusted-state advancement without the exact linear token sequence.
+Exercise source and target aliasing, partial activation, old identity injection, old history injection, abort cleanup, activation reuse, abort reuse, and revocation while streaming compromise plaintext.
 Exercise startup base enumeration, reserve/register/activate/remove/unregister failures, stale records, symlinks, junctions, reparse points, and attempts to register arbitrary paths.
 
 - [ ] **Step 6: Benchmark transaction overhead**
@@ -877,7 +978,7 @@ Measure object publication separately from cryptography for 1 KiB, 1 MiB, 100 Mi
 
 - [ ] **Step 7: Verify and commit**
 
-Run: `cargo test -p notecrypt-store --test transaction_faults --test rollback --test chunk_revocation --test cleanup_lifecycle --test replication_limits && cargo bench -p notecrypt-benches --bench store`
+Run: `cargo test -p notecrypt-store --test transaction_faults --test rollback --test chunk_revocation --test cleanup_lifecycle --test replication_limits --test reachability_tokens --test compromise_capabilities && cargo bench -p notecrypt-benches --bench store`
 
 Expected: all fault points recover to a valid authenticated head, revoked chunks never publish, replication budgets clean quarantine, and cleanup remains confined to the fixed base.
 
@@ -1066,10 +1167,6 @@ Use a blocking fake store and assert that `submit` returns in under 10 ms, progr
 
 ```rust
 pub enum Command {
-    BeginInitialize(BeginInitializeVault),
-    ConfirmInitialize(ConfirmInitializeVault),
-    CancelInitialize(CancelInitializeVault),
-    Unlock(UnlockVault),
     List(ListEntries),
     CreateFile(CreateFile),
     CreateDirectory(CreateDirectory),
@@ -1089,9 +1186,6 @@ pub struct ServiceHandle;
 pub struct OperationHandle;
 
 pub enum OperationResult {
-    InitializationPending(InitializationPending),
-    Initialized(VaultSummary),
-    Unlocked(SessionSummary),
     Entries(Vec<EntrySummary>),
     EntryChanged(EntrySummary),
     Exported(ExportSummary),
@@ -1121,6 +1215,8 @@ impl OperationHandle {
     pub fn try_result(&self) -> Result<Option<OperationResult>, ServiceError>;
 }
 ```
+
+Recovery initialization, confirmation, and unlock do not implement `Command` or `OperationResult` and use the dedicated secret bridge defined in Task 9.
 
 - [ ] **Step 3: Implement bounded worker execution**
 
@@ -1153,11 +1249,14 @@ Commit: `feat(service): add operation runtime and priority controls`
 - Modify: `crates/notecrypt-service/src/service.rs`
 - Modify: `crates/notecrypt-service/src/lib.rs`
 - Test: `crates/notecrypt-service/tests/lock_deadline.rs`
+- Test: `crates/notecrypt-service/tests/recovery_secret_boundary.rs`
+- Test: `crates/notecrypt-service/tests/compile_fail/recovery_secret_command.rs`
+- Test: `crates/notecrypt-service/tests/compile_fail/recovery_presentation_clone.rs`
 
 **Interfaces:**
 
 - Consumes: an injected `Arc<dyn VaultRepository>` that returns an opaque `UnlockedVault` capability.
-- Produces: session policies, scoped capability ownership, and every consumer-owned host-port DTO and trait.
+- Produces: session policies, scoped capability ownership, the dedicated recovery-secret bridge, and every consumer-owned host-port DTO and trait.
 
 - [ ] **Step 1: Define every service-owned host port before implementing adapters**
 
@@ -1178,6 +1277,14 @@ pub struct WorkspaceLease {
     pub id: WorkspaceId,
     pub root: std::path::PathBuf,
     pub mode: WorkspaceMode,
+    ownership: Box<dyn WorkspaceOwnershipGuard>,
+}
+
+pub trait WorkspaceOwnershipGuard: Send {}
+
+pub struct StartupCleanupReport {
+    pub removed: usize,
+    pub skipped_live: usize,
 }
 
 pub struct TargetWorkspaceRequest {
@@ -1250,6 +1357,23 @@ pub struct EditorExit {
 
 pub struct DeviceKeyReference(Vec<u8>);
 pub struct DeviceUnlockSecret(notecrypt_crypto::DeviceWrappingKey);
+pub struct RecoverySecretInput(zeroize::Zeroizing<Vec<u8>>);
+pub struct RecoverySecretPresentation;
+pub struct PendingRecoveryInitialization;
+
+impl RecoverySecretInput {
+    pub fn from_protected_bytes(bytes: Vec<u8>) -> Result<Self, HostPortError>;
+    pub(crate) fn into_crypto_passphrase(self) -> notecrypt_crypto::RecoveryPassphrase;
+    pub(crate) fn into_store_unlock(self) -> UnlockRepositorySecret;
+}
+
+impl RecoverySecretPresentation {
+    pub fn present_once(self, presenter: &mut dyn RecoverySecretPresenter) -> Result<(), HostPortError>;
+}
+
+pub trait RecoverySecretPresenter: Send {
+    fn present(&mut self, secret: &[u8]) -> Result<(), HostPortError>;
+}
 
 impl DeviceKeyReference {
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, HostPortError>;
@@ -1276,6 +1400,7 @@ pub enum HostPortError {
 }
 
 pub trait WorkspaceProvider: Send + Sync {
+    fn cleanup_owned_base(&self) -> Result<StartupCleanupReport, HostPortError>;
     fn create_target(&self, request: TargetWorkspaceRequest) -> Result<WorkspaceLease, HostPortError>;
     fn create_whole_vault(&self, request: VaultWorkspaceRequest) -> Result<WorkspaceLease, HostPortError>;
     fn materialization_target(
@@ -1309,6 +1434,26 @@ pub trait WorkspaceProvider: Send + Sync {
     fn workspace_absent(&self, id: &WorkspaceId) -> Result<bool, HostPortError>;
 }
 
+impl ServiceHandle {
+    pub fn begin_recovery_initialization(
+        &self,
+        request: BeginRecoveryInitialization,
+    ) -> Result<(PendingRecoveryInitialization, Option<RecoverySecretPresentation>), ServiceError>;
+    pub fn confirm_recovery_initialization(
+        &self,
+        pending: PendingRecoveryInitialization,
+        confirmation: RecoverySecretInput,
+    ) -> Result<VaultSummary, ServiceError>;
+    pub fn cancel_recovery_initialization(
+        &self,
+        pending: PendingRecoveryInitialization,
+    ) -> Result<(), ServiceError>;
+    pub fn unlock_with_recovery(
+        &self,
+        secret: RecoverySecretInput,
+    ) -> Result<SessionSummary, ServiceError>;
+}
+
 pub trait WorkspaceWatch: Send {
     fn next_event(&mut self, timeout: std::time::Duration) -> Result<Option<WorkspaceEvent>, HostPortError>;
 }
@@ -1340,15 +1485,22 @@ Limit `StableSourceToken` to 256 opaque bytes, forbid formatting and serializati
 Stream saved bytes only from `StableSource` and never reopen the path after the handle is acquired.
 The service wraps `validate_stable_source` in the store's `PublicationGuard` so validation occurs after staged authentication and immediately before journal publication.
 Create workspaces only for a store-reserved `WorkspaceId` below the fixed canonical Notecrypt-owned base.
-The provider never accepts a caller-supplied base or cleanup path and never enumerates cleanup candidates itself.
+The provider never accepts a caller-supplied base or cleanup path.
+It holds a short-lived OS-backed base coordination lock during enumeration and creation and acquires the per-workspace ownership lock before releasing that base lock.
+`WorkspaceLease` retains the ownership guard until verified removal.
+`cleanup_owned_base` holds the base lock, attempts each ownership lock non-blockingly, removes only acquired workspaces, skips held locks as live, and never treats PID or timestamp metadata as deletion authority.
+Use Unix `flock` or `fcntl` and Windows file-sharing or `LockFileEx` through this service-owned port.
+Make `RecoverySecretInput` zeroizing, bounded to 1,024 bytes, non-cloneable, non-formatting, and non-serializable.
+Make `RecoverySecretPresentation` one-time consumable and impossible to embed in `Command`, `OperationResult`, `OperationEvent`, `ServiceSnapshot`, JSON output, logs, or diagnostics.
+The narrow consuming conversions are crate-private and expose no borrowed secret bytes outside the conversion call.
 Make `DeviceUnlockSecret` non-cloneable and non-formatting, and do not expose `secrecy` or raw key bytes through the port.
 Give the service an internal consuming conversion from `DeviceUnlockSecret` to the store's `DeviceWrappingKey` input without exposing bytes to a UI or loggable DTO.
-Permit the service crate's otherwise narrow dependency on `notecrypt-crypto` only for this opaque secret container, and enforce with dependency tests that no service command, result, event, or UI-facing port exposes it.
+Permit the service crate's otherwise narrow dependency on `notecrypt-crypto` only for the recovery and device secret bridges, and enforce with compile-fail dependency tests that no general service or UI DTO exposes either.
 Provide fake implementations for service tests and an unavailable device-unlock implementation for Checkpoint A.
 
 - [ ] **Step 2: Write failing unlock and lock tests**
 
-Cover wrong passphrase, KDF cancellation before start and after computation before publication, saturated ordinary queue, pre-unlock fixed-base cleanup failure, inactivity timeout, absolute deadline, explicit lock, system suspend notification, coalesced trusted TUI activity, cleanup failure, and a pending durable save.
+Cover wrong passphrase, KDF cancellation before start and after computation before publication, one-time recovery presentation, second-presentation refusal, general-DTO compile failures, saturated ordinary queue, pre-unlock fixed-base cleanup failure, live-workspace skip, inactivity timeout, absolute deadline, explicit lock, system suspend notification, coalesced trusted TUI activity, cleanup failure, and a pending durable save.
 Assert that lock and deadline controls cannot be rejected or starved by ordinary work.
 
 - [ ] **Step 3: Implement session state**
@@ -1377,11 +1529,11 @@ Hold the opaque `Box<dyn UnlockedVault>` capability inside the service session.
 Workers receive only `Box<dyn UnlockedVaultLease>` values for bounded operations.
 Replication workers receive only `Box<dyn ReplicationLease>` with profile-1 limits reduced by backend and available-space capabilities.
 Call `begin_close` when lock begins so new leases fail, close the capability after active leases reach a safe boundary or the final-save grace expires, and rely on capability drop to erase store-owned key material.
-Run `VaultRepository::cleanup_owned_workspace_base` before entering `Unlocking` and expose no unlocked session while that cleanup is incomplete.
+Run `WorkspaceProvider::cleanup_owned_base` before entering `Unlocking` and expose no unlocked session while that coordination pass is incomplete.
 
 - [ ] **Step 4: Verify and commit**
 
-Run: `cargo test -p notecrypt-service`
+Run: `cargo test -p notecrypt-service && cargo test -p notecrypt-service --test recovery_secret_boundary`
 
 Expected: responsiveness and deadline tests pass without sleeping on arbitrary timing assumptions.
 
@@ -1408,8 +1560,8 @@ Commit: `feat(service): add unlock sessions and host ports`
 
 - [ ] **Step 1: Write failing command-to-result contract tests**
 
-Submit begin-initialize, confirmation, cancellation, unlock, status, list, lock control, and reopen through `ServiceHandle` against a temporary `VaultStore`.
-Assert the exact `OperationResult`, event sequence, error category, session-state transition, and repository-head transition for each command.
+Exercise begin-initialize, confirmation, cancellation, and unlock through the dedicated `ServiceHandle` recovery-secret methods and status, list, lock control, and reopen through ordinary commands against a temporary `VaultStore`.
+Assert the exact dedicated result or ordinary `OperationResult`, event sequence, error category, session-state transition, and repository-head transition for each operation.
 Prove that generated mode emits one non-cloneable one-time 12-word phrase, requires exact confirmation, and publishes no bootstrap, slot, snapshot, trusted state, or head before confirmation.
 Prove that custom mode requires policy version 1, exposes the offline-verifier warning, requires explicit risk acceptance and a second matching secret, and publishes nothing on rejection, mismatch, cancellation, or CSPRNG failure.
 
@@ -1491,6 +1643,7 @@ Commit: `feat(service): add local mutations and durable reopen`
 - Create: `tests/notecrypt-e2e/src/test_editor.rs`
 - Test: `adapters/notecrypt-editor-workspace/tests/editor_profiles.rs`
 - Test: `adapters/notecrypt-editor-workspace/tests/workspace_boundary.rs`
+- Test: `adapters/notecrypt-editor-workspace/tests/ownership_locks.rs`
 
 **Interfaces:**
 
@@ -1501,11 +1654,14 @@ Commit: `feat(service): add local mutations and durable reopen`
 
 Assert that workspaces are direct random-ID children of the fixed canonical Notecrypt-owned base, paths are outside the repository, permissions are restrictive, random names reveal no logical filename, authenticated register and activate precede plaintext creation, materialized files publish atomically with suppression generations, arming establishes a baseline, and indexing exclusions are attempted without claiming guarantees.
 Reject arbitrary bases and paths, nested cleanup targets, preexisting children, symlinks, junctions, reparse points, and workspace IDs not reserved by the store capability.
+Use two processes to cover simultaneous creation and cleanup, held ownership skip, crashed-owner lock release, PID reuse, stale records, base-lock failure, ownership-lock failure, and cleanup retry.
 
 - [ ] **Step 2: Implement the service-owned workspace ports**
 
 Implement `WorkspaceProvider` and `WorkspaceWatch` from `notecrypt-service` without redefining their types in the adapter.
 Consume a store-reserved ID, let the store authenticate registered state, create only the derived fixed-base child, verify restrictive permissions, let the store activate the record, and write no plaintext before activation.
+Hold the short-lived base lock while creating the child and acquiring its ownership lock, keep the ownership guard inside `WorkspaceLease` for the complete plaintext lifetime, and release it only after verified removal.
+Cleanup holds the base lock and attempts ownership locks non-blockingly, skips held live workspaces without failure, and deletes only after acquiring ownership.
 On cleanup remove without following links, verify absence through the provider, and let the store unregister only after that proof.
 Keep enumeration and cleanup-record authentication in the store, not the adapter.
 Implement staged materialization, atomic publication, suppression-token correlation, and explicit path arming before exposing the adapter to whole-vault orchestration.
@@ -1526,7 +1682,7 @@ Pass the path as a direct process argument and never through a shell.
 
 - [ ] **Step 5: Verify and commit**
 
-Run: `cargo test -p notecrypt-editor-workspace --test editor_profiles --test workspace_boundary`
+Run: `cargo test -p notecrypt-editor-workspace --test editor_profiles --test workspace_boundary --test ownership_locks`
 
 Expected: fixed-base workspace ownership, reserve/register/activate/remove/unregister ordering, editor profiles, strict supervision, and process termination pass on the current platform.
 
@@ -1612,6 +1768,7 @@ Test `--vault-root`, `NOTECRYPT_VAULT_ROOT`, precedence, protected passphrase pr
 Test that interactive `init` defaults to a generated 12-word recovery phrase, shows it once, discloses offline verification, requires exact confirmation, and leaves the target empty on mismatch, cancellation, output failure, confirmation failure, or CSPRNG failure.
 Test that custom recovery requires `--custom-recovery-passphrase`, policy version 1, the offline-guessing warning, explicit risk acceptance, and two protected matching entries.
 Test that non-interactive generated recovery requires an explicit owner-only recovery-output file descriptor plus a separate confirmation-input descriptor and never places the phrase in arguments, normal stdout, logs, JSON, or error text.
+Test the dedicated `RecoverySecretPresentation` is consumed once and a second presentation attempt is impossible through the built CLI harness.
 Test that non-interactive custom recovery additionally requires `--accept-offline-guessing-risk`, two distinct protected input descriptors, and exact policy-compliant matching bytes.
 Test that no standalone `unlock` or `lock` subcommand is exposed in phase 1.
 Test `create` as the explicit empty-file creation command and reject collisions unless replacement is explicitly requested.
@@ -1704,6 +1861,7 @@ Commit: `feat(cli): expose complete local vault commands`
 
 Use `ratatui::backend::TestBackend` to snapshot initialization mode selection, one-time generated recovery display, phrase confirmation, custom offline-risk warning, custom confirmation, locked, unlocking, tree, activity, warning, and cleanup-required screens at 80x24, 120x40, and the minimum supported size.
 Test keyboard-only navigation, clear focus, secret-input masking, and zeroization of the passphrase input buffer after submission.
+Test the TUI consumes `RecoverySecretPresentation` exactly once and cannot recover it from app state, view models, events, snapshots, or render fixtures after leaving the presentation screen.
 Test that navigation cannot dismiss or bypass required recovery confirmation and that cancellation publishes no vault state.
 
 - [ ] **Step 2: Implement the view model and event loop**
@@ -1756,6 +1914,7 @@ Commit: `feat(tui): deliver runnable local encrypted vault`
 - Modify: `apps/notecrypt-cli/src/args.rs`
 - Modify: `apps/notecrypt-cli/src/config.rs`
 - Modify: `apps/notecrypt-cli/src/commands.rs`
+- Modify: `apps/notecrypt-cli/src/output.rs`
 - Modify: `ui/notecrypt-tui/src/app.rs`
 - Modify: `ui/notecrypt-tui/src/keymap.rs`
 - Modify: `ui/notecrypt-tui/src/view_model.rs`
@@ -1827,23 +1986,17 @@ Commit: `feat(vault): add bounded whole-vault autosave sessions`
 - Modify: `crates/notecrypt-replication/src/lib.rs`
 - Modify: `crates/notecrypt-service/src/command.rs`
 - Modify: `crates/notecrypt-service/src/service.rs`
-- Modify: `apps/notecrypt-cli/src/args.rs`
-- Modify: `apps/notecrypt-cli/src/config.rs`
-- Modify: `apps/notecrypt-cli/src/commands.rs`
-- Modify: `ui/notecrypt-tui/src/app.rs`
-- Modify: `ui/notecrypt-tui/src/keymap.rs`
-- Modify: `ui/notecrypt-tui/src/view_model.rs`
-- Modify: `ui/notecrypt-tui/src/dialogs.rs`
 - Test: `crates/notecrypt-replication/tests/sync_matrix.rs`
 - Test: `crates/notecrypt-replication/tests/migration.rs`
 - Test: `crates/notecrypt-replication/tests/limits.rs`
-- Create: `tests/notecrypt-e2e/tests/presentation_journey.rs`
-- Test: `tests/notecrypt-e2e/tests/recovery_journey.rs`
+- Test: `crates/notecrypt-replication/tests/reachability_proof.rs`
+- Test: `crates/notecrypt-replication/tests/compromise_rekey.rs`
+- Test: `crates/notecrypt-service/tests/recovery_freshness.rs`
 
 **Interfaces:**
 
 - Consumes: `VaultBackend`, bounded immutable bootstrap operations, an object-safe revocable `ReplicationLease`, and deterministic core reconciliation.
-- Produces: budgeted authenticated fetch, reconciliation, conditional publish, retry, `BackendCopy`, and history-free `CompromiseRekey`.
+- Produces: linear budgeted authenticated fetch, reconciliation, conditional publish, retry, clean-device freshness gating, in-memory `BackendCopy`, and history-free `CompromiseRekey` state-machine proof.
 - Produces: explicit byte-preserving conversion between core `ObjectId` and backend `OpaqueObjectId` without exposing either private field.
 
 - [ ] **Step 1: Write failing synchronization-matrix tests**
@@ -1877,14 +2030,30 @@ Test the plan independently from I/O.
 Fetch into quarantine, authenticate through the store, and move verified immutable objects into the repository.
 Never advance a local or remote head before all reachable objects authenticate.
 Read and validate the bounded immutable bootstrap before any head, create it only when absent during publication, reject mismatched existing bytes, and independently read back the exact bootstrap before success.
-Perform bounded existence checks, authenticated imports returning typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, reachable traversal, encrypted export, replicated snapshot commits, and trusted-remote recording only through the object-safe revocable lease supplied by the active service session.
+Perform bounded existence checks, authenticated imports returning typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, reachable verification, encrypted export, replicated snapshot commits, and trusted-remote recording only through the object-safe revocable lease supplied by the active service session.
 Use the strictest profile-1, backend-advertised, and available-space limit for every object kind, aggregate bytes, object count, graph depth, timeout, progress interval, and quarantine disk.
 Treat `StoreError::Locked` as cancellation and never retain a raw `VaultStore` handle in replication state.
 Begin a backend publication with the observed head version, stream missing immutable objects through bounded `stage_object` calls, and commit the authenticated replacement head.
 Treat a stale publication result as a refetch and reconciliation retry.
 Treat an indeterminate publication result by rereading the remote head and authenticating it before deciding whether the attempted replacement committed or needs reconciliation.
-Verify the bootstrap, published head, and complete reachable graph through independent readback before atomically recording the trusted remote observation or sync success.
+Convert the backend observation into bounded canonical `BackendObservationFingerprint` bytes, call `verify_reachable`, consume its `VerifiedReachableHead` through either `commit_replicated_snapshot` or `accept_current_verified`, then consume `CommittedReachableHead` through `record_trusted_remote`.
+Verify the bootstrap, published head, and complete reachable graph through independent readback before beginning this linear sequence or reporting sync success.
+Reject partial, stale, differently limited, differently observed, differently identified, revoked, or reused proofs without advancing local or trusted-remote state.
 Remove quarantine on cancellation, lock, timeout, stalled trickle input, authentication failure, or any limit failure.
+
+For a clean device, return `RecoveryFreshness::UnprovableOnCleanDevice` after graph verification and before `record_trusted_remote` establishes the first baseline.
+Keep `RecoveryFreshness::Proven`, `RecoveryFreshness::UnprovableOnCleanDevice`, and `RollbackDetected` as distinct typed outcomes.
+After explicit acknowledgement, use `TrustedRemoteProvenance::FreshnessUnprovableAcknowledged`; otherwise fail closed and consume no proof into trusted state.
+
+```rust
+pub enum RecoveryFreshness {
+    Proven,
+    UnprovableOnCleanDevice {
+        snapshot: SnapshotId,
+        observation: BackendObservationFingerprint,
+    },
+}
+```
 
 - [ ] **Step 4: Implement conflict preservation**
 
@@ -1894,25 +2063,30 @@ Expose typed conflict inspection and explicit keep-local, keep-remote, keep-both
 
 - [ ] **Step 5: Implement `BackendCopy` and `CompromiseRekey`**
 
-Define `BackendCopy` as migration of the same vault ID, Vault Root Key, bootstrap, authenticated graph, and history to a separately configured backend.
+Define `BackendCopy` as migration of the same vault ID, Vault Root Key, bootstrap, authenticated Notecrypt snapshot graph, and encrypted objects to a separately configured backend.
+Do not promise identical backend-native Git commit IDs or history.
 Persist source head, target backend identity, verified object cursor, bootstrap state, and target head state outside the vault repository.
 Transfer and independently read back the immutable bootstrap, authenticate and copy every reachable encrypted object, publish the same head conditionally, and switch the active backend only after the target graph verifies.
-Define `CompromiseRekey` as creation of a new vault ID, Vault Root Key, generated or explicitly confirmed custom recovery credential, file and revision identities, object identities, bootstrap, and parentless current-state snapshot in an empty target backend.
-Stream current authenticated plaintext through bounded decrypt and fresh encryption without copying any old wrapper, object, snapshot parent, Git commit, or backend history.
-Reject non-empty targets and state explicitly that already exposed ciphertext and keys cannot be made confidential again.
+Acquire a revocable `CompromiseRekeySource` that enumerates authenticated logical entries and streams bounded plaintext from the active source session.
+Create a linear `PendingVaultTarget` with a distinct empty target, new vault ID, Vault Root Key, generated or explicitly confirmed custom recovery credential, file and revision identities, object identities, bootstrap, staged objects, verification, abort cleanup, and one-way activation.
+Stream current authenticated plaintext from the source capability into fresh target encryption without copying any old wrapper, identity, object, snapshot parent, Git commit, or backend history.
+Reject source and target aliasing, non-empty targets, partial activation, reuse after abort or activation, and state explicitly that already exposed ciphertext and keys cannot be made confidential again.
 Never route suspected compromise to `BackendCopy` or recovery-slot rewrapping.
 
-- [ ] **Step 6: Complete sync, conflict, copy, and rekey presentation**
+Use the in-memory backend to prove abort cleanup, drop cleanup, complete verification before activation, revocation, source-target distinction, new logical identities, parentless target head, and one-time capability consumption.
 
-Add CLI parsing, configuration, typed output, and warning acknowledgements for `sync`, conflict list, conflict inspect, conflict resolve, `vault backend-copy`, and `vault compromise-rekey`.
-Add TUI actions, keymap entries, view-model states, progress, conflict inspector and resolver dialogs, rollback warnings, indeterminate-publication warnings, backend-copy confirmation, and compromise-rekey exposure warning plus recovery-phrase confirmation.
-Drive built-process CLI and pseudo-terminal TUI journeys through rollback warning, conflict display and resolution, lock during sync and rekey, backend-copy bootstrap readback failure, empty-target enforcement, and a parentless history-free rekey result.
+- [ ] **Step 6: Prove linear replication, freshness, copy, and rekey contracts**
+
+Use the in-memory backend and fake store to prove the exact `VerifiedReachableHead` to `CommittedReachableHead` to trusted-remote sequence, including the explicit no-local-commit transition.
+Prove partial, stale, differently limited, differently observed, differently operated, revoked, or reused tokens cannot advance state.
+Prove an older but cryptographically valid clean-device remote returns `FreshnessUnprovable`, establishes no baseline without acknowledgement, records unprovable provenance after acknowledgement, and is never labeled latest or verified-fresh.
+Prove `BackendCopy` preserves the Notecrypt snapshot graph without promising backend-native history and prove `CompromiseRekeySource` and `PendingVaultTarget` state transitions entirely against in-memory backends.
 
 - [ ] **Step 7: Verify Checkpoint B and commit**
 
-Run: `cargo test -p notecrypt-core && cargo test -p notecrypt-replication --test sync_matrix --test migration --test limits && cargo test -p notecrypt-cli && cargo test -p notecrypt-tui && cargo test -p notecrypt-e2e --test recovery_journey --test presentation_journey`
+Run: `cargo test -p notecrypt-core && cargo test -p notecrypt-replication --test sync_matrix --test migration --test limits --test reachability_proof --test compromise_rekey && cargo test -p notecrypt-service --test recovery_freshness`
 
-Expected: bounded sync preserves all authenticated content, limits clean quarantine, conflicts are inspectable and resolvable through CLI and TUI, backend copy preserves history, compromise rekey creates a new history-free vault, and no stale head is overwritten.
+Expected: bounded sync preserves authenticated content, limits clean quarantine, linear proofs prevent misuse, freshness acknowledgement records exact provenance, backend copy preserves the Notecrypt graph, compromise rekey creates a distinct verified history-free target, and no stale head is overwritten.
 
 Commit: `feat(sync): add authenticated replication and conflicts`
 
@@ -1927,6 +2101,8 @@ Commit: `feat(sync): add authenticated replication and conflicts`
 - Create: `adapters/notecrypt-backend-git/src/repository.rs`
 - Create: `adapters/notecrypt-backend-git/src/backend.rs`
 - Create: `adapters/notecrypt-backend-git/src/hooks.rs`
+- Create: `adapters/notecrypt-backend-git/src/auth.rs`
+- Create: `adapters/notecrypt-backend-git/src/limits.rs`
 - Create: `adapters/notecrypt-backend-git/src/quarantine.rs`
 - Create: `adapters/notecrypt-backend-git/src/verify.rs`
 - Modify: `adapters/notecrypt-backend-git/src/lib.rs`
@@ -1940,7 +2116,11 @@ Commit: `feat(sync): add authenticated replication and conflicts`
 - Test: `adapters/notecrypt-backend-git/tests/conformance.rs`
 - Test: `adapters/notecrypt-backend-git/tests/hardening.rs`
 - Test: `adapters/notecrypt-backend-git/tests/history_verification.rs`
+- Test: `adapters/notecrypt-backend-git/tests/transport_auth.rs`
+- Test: `adapters/notecrypt-backend-git/tests/verification_limits.rs`
 - Test: `tests/notecrypt-e2e/tests/git_sync.rs`
+- Create: `tests/notecrypt-e2e/tests/presentation_journey.rs`
+- Create: `tests/notecrypt-e2e/tests/recovery_journey.rs`
 - Test: `tests/notecrypt-e2e/tests/plaintext_canary.rs`
 
 **Interfaces:**
@@ -1952,6 +2132,8 @@ Commit: `feat(sync): add authenticated replication and conflicts`
 
 Use a fake executable to capture argument boundaries.
 Test spaces, leading dashes, Unicode, malicious remote names, ref injection, shell metacharacters, hostile Git output, non-repository paths, unexpected worktree layout, hostile hooks, `include` and `includeIf`, aliases, filters, submodules, pagers, custom SSH commands, external remote helpers, inherited `GIT_*` variables, replace objects, repository alternates, and local `file` transport without the separate local capability.
+Test successful HTTPS through only the trusted Git-shipped helper under the selected Git installation's canonical exec path, successful SSH through one approved canonical executable with controlled arguments and the approved agent connection, and successful use of one selected trusted credential provider imported into isolated configuration.
+Reject repository-controlled helper, credential, SSH, exec-path, configuration, hook, filter, replace, pager, and environment substitutions.
 Test repository marker, canonical absolute Git directory, worktree relationship, dedicated branch, remote, protocol, and configuration validation on every operation.
 Test that an unrelated existing branch, worktree, path, mode, commit, or history cannot enter the dedicated Notecrypt branch.
 
@@ -1970,6 +2152,18 @@ pub struct GitRequest {
     pub repository: std::path::PathBuf,
     pub arguments: Vec<std::ffi::OsString>,
     pub operation: GitOperation,
+    pub verification_limits: Option<GitVerificationLimits>,
+}
+
+pub struct GitVerificationLimits {
+    pub max_pack_bytes: u64,
+    pub max_quarantine_bytes: u64,
+    pub max_object_count: u64,
+    pub max_commit_count: u64,
+    pub max_ancestry_depth: u32,
+    pub max_duration: std::time::Duration,
+    pub progress_interval: std::time::Duration,
+    pub free_space_reserve_bytes: u64,
 }
 ```
 
@@ -1980,8 +2174,12 @@ Remove every inherited `GIT_*` variable, then set only Notecrypt-controlled `GIT
 For every invocation set `core.hooksPath` to an empty trusted Notecrypt-owned directory, disable pagers and replace objects, use `push --no-verify` for internal publication, bypass system and global configuration, and reject local includes or any key outside the documented allowlist.
 Reject aliases, filters, submodules, custom SSH commands, repository alternates, unknown remote-helper schemes, `ext`, and local `file` transport unless the caller holds the separate local or test capability.
 Allow only explicitly configured HTTPS or SSH remotes for normal operations and set protocol policy to deny everything else.
+Resolve the trusted Git-shipped HTTPS helper only below the selected Git executable's canonical exec path.
+Invoke one explicitly approved canonical SSH executable with controlled arguments and import only the approved SSH agent connection.
+Generate an isolated configuration containing exactly the selected trusted credential provider and no repository-controlled credential keys.
 Never execute Git aliases, hooks, external helpers, pagers, filters, or a shell.
 Before every operation validate the repository marker, canonical absolute Git directory, worktree relationship, dedicated branch, configured remote, selected transport, and complete allowed local configuration.
+Set `GitVerificationLimits::PHASE_1` to 1 TiB raw pack bytes, the smaller of 1 TiB and 80 percent of starting free space for quarantine, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, 30 minutes total, 30 seconds progress interval, and a 1 GiB free-space reserve.
 
 - [ ] **Step 3: Implement Git backend conformance**
 
@@ -1993,6 +2191,10 @@ Implement `stage_object` with `git hash-object -w --no-filters` and retain the r
 On commit, construct validated trees with `git mktree`, create one commit with `git commit-tree`, update only the private temporary ref, and push that ref with `--no-verify` to the remote dedicated branch with normal fast-forward protection.
 Treat `ls-remote` as ref discovery only.
 Fetch the exact discovered candidate into an isolated quarantine repository with no alternates before advancing visible state.
+Pass `GitVerificationLimits` into every candidate fetch and ancestry verification before Git starts.
+Monitor raw downloaded pack bytes, quarantine disk, Git object and commit counts, ancestry depth, wall time, bounded progress, and free-space reserve while the complete process tree runs.
+On breach or cancellation terminate the complete process tree, remove quarantine, and return no candidate.
+After successful unpacking apply the independent replication limits before store graph parsing and never treat replication limits as pack-ingestion protection.
 Validate every newly introduced commit, tree, path, mode, and blob from the last trusted commit through the candidate, or the full ancestry when no trusted commit exists, including intermediate ancestry whose tip is clean.
 Accept only the repository marker, byte-identical immutable bootstrap, authenticated head, allowed encrypted object paths, and regular-file or directory modes.
 Reject unexpected paths, executable modes, symlinks, submodules, transient plaintext commits, malformed or unauthenticated vault blobs, missing blobs, corrupt objects, replacement references, and an incomplete reachable graph.
@@ -2021,20 +2223,28 @@ Return indeterminate rather than success on bootstrap, candidate fetch, history,
 
 Create two local clones and a bare remote.
 Exercise independent changes, same-file conflicts, push races, remote deletion, malformed remote objects, missing blobs, corrupt objects, a clean tip with an unsafe intermediate commit, false committed outcomes, false `ls-remote` readback, bootstrap mismatch, backup readback failure, and clean-device recovery.
+Exercise oversized and adversarial delta packs, excessive object and commit counts, excessive ancestry, trickle fetch, cancellation, wall timeout, process-tree termination, quarantine reserve exhaustion, cleanup on every failure, and independent post-unpack replication-limit failure.
 Scan every Git commit, path, blob, log line, and process argument for unique plaintext canaries and logical names.
 
-- [ ] **Step 7: Complete Git CLI and TUI integration**
+- [ ] **Step 7: Run production Git copy, rekey, and recovery journeys**
+
+Run real Git-backed `BackendCopy` and prove it preserves the Notecrypt snapshot graph while allowing different target Git commit identities and history.
+Run real Git-backed `CompromiseRekey` through `CompromiseRekeySource` and `PendingVaultTarget`, prove source and target cannot alias, abort cleans all target state, partial state cannot activate, and successful activation has a new bootstrap, new identities, fresh objects, and a parentless snapshot.
+Recover an older but cryptographically valid remote on a clean device and produce `FreshnessUnprovable` after graph authentication but before the first trusted baseline.
+Prove CLI automation fails without `--acknowledge-unprovable-freshness`, TUI recovery uses a non-dismissible deliberate confirmation, acknowledgement records unprovable provenance atomically, and no output says latest or verified-fresh.
+
+- [ ] **Step 8: Complete Git CLI and TUI integration**
 
 Add onboarding remote, dedicated branch, transport, prompt policy, sync retry, and backup configuration to CLI parsing and typed JSON output.
 Wire TUI onboarding, sync, and backup actions through the app, keymap, view model, progress pane, and dialogs.
 Show rollback, conflict, stale-head retry, no-remote backup, indeterminate publication, and verification failure states without claiming success.
-Drive built-process CLI and pseudo-terminal TUI journeys through onboarding, sync, backup, conflict display, rollback warning, indeterminate warning, and backup readback failure.
+Drive built-process CLI and pseudo-terminal TUI journeys through onboarding, sync, backup, conflict display and resolution, rollback warning, freshness-unprovable acknowledgement, indeterminate warning, backup readback failure, `BackendCopy`, and `CompromiseRekey` including recovery-phrase presentation and confirmation.
 
-- [ ] **Step 8: Verify and commit**
+- [ ] **Step 9: Verify and commit**
 
-Run: `cargo test -p notecrypt-backend-git --test conformance --test hardening --test history_verification && cargo test -p notecrypt-cli && cargo test -p notecrypt-tui && cargo test -p notecrypt-e2e --test git_sync --test plaintext_canary --test presentation_journey --test recovery_journey`
+Run: `cargo test -p notecrypt-backend-git --test conformance --test hardening --test history_verification --test transport_auth --test verification_limits && cargo test -p notecrypt-cli && cargo test -p notecrypt-tui && cargo test -p notecrypt-e2e --test git_sync --test plaintext_canary --test presentation_journey --test recovery_journey`
 
-Expected: Git passes bootstrap and backend conformance, hostile process state cannot execute, complete candidate history and graph verification reject every adversarial case, CLI and TUI warnings remain honest, two-device tests preserve conflicts, and canary scans find no plaintext.
+Expected: approved HTTPS, SSH, and credential-provider flows work; hostile substitutions fail; Git ingestion limits terminate and clean adversarial fetches; linear graph verification, production copy and rekey, freshness acknowledgement, CLI and TUI warnings, conflict preservation, and canary scans pass.
 
 Commit: `feat(git): add verified synchronization and backup`
 
@@ -2120,7 +2330,28 @@ Commit: `feat(unlock): add native device-bound vault access`
 **Files:**
 
 - Create: `tests/notecrypt-e2e/tests/crash_recovery.rs`
-- Modify: fuzz targets under `crates/notecrypt-format/fuzz/`
+- Create: `fuzz/targets.toml`
+- Create: `scripts/verify-fuzz-targets.sh`
+- Create: `scripts/run-fuzz-manifest.sh`
+- Modify: `crates/notecrypt-format/fuzz/Cargo.toml`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_bootstrap.rs`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_object.rs`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_manifest.rs`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_tree.rs`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_snapshot.rs`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_head.rs`
+- Create: `crates/notecrypt-format/fuzz/fuzz_targets/decode_crypto_envelope.rs`
+- Create: `crates/notecrypt-backend/fuzz/fuzz_targets/parse_inventory.rs`
+- Create: `crates/notecrypt-backend/fuzz/fuzz_targets/parse_response.rs`
+- Create: `adapters/notecrypt-backend-git/fuzz/fuzz_targets/parse_remote_url.rs`
+- Create: `adapters/notecrypt-backend-git/fuzz/fuzz_targets/parse_config.rs`
+- Create: `adapters/notecrypt-backend-git/fuzz/fuzz_targets/parse_commit.rs`
+- Create: `adapters/notecrypt-backend-git/fuzz/fuzz_targets/parse_tree.rs`
+- Create: `adapters/notecrypt-backend-git/fuzz/fuzz_targets/parse_ref.rs`
+- Create: `adapters/notecrypt-backend-git/fuzz/fuzz_targets/parse_output.rs`
+- Create: `crates/notecrypt-replication/fuzz/fuzz_targets/parse_graph_metadata.rs`
+- Create: `crates/notecrypt-replication/fuzz/fuzz_targets/parse_limits.rs`
+- Create: `tests/fuzz-regressions/`
 - Modify: `.github/workflows/ci.yml`
 - Create: `docs/security/threat-model.md`
 - Create: `docs/security/recovery.md`
@@ -2143,18 +2374,28 @@ Assert no trusted head references missing or unauthenticated data.
 Scan repository paths, object bytes, Git history, logs, structured diagnostics, error text, process arguments, cleanup registry, and benchmark output.
 Fail the test on content, logical name, extension, vault label, or exact sensitive size.
 
-- [ ] **Step 3: Add dependency and unsafe-code gates**
+- [ ] **Step 3: Add and execute the complete fuzz manifest**
+
+Check in `fuzz/targets.toml` with every durable decoder and cryptographic envelope; bootstrap, head, inventory, and backend response parser; Git remote URL, configuration, commit, tree, ref, and output parser; and replication graph-metadata and limit parser listed above.
+Make `scripts/verify-fuzz-targets.sh` compare the manifest, fuzz Cargo targets, and CI schedule bidirectionally and fail on a missing, duplicate, or unlisted target.
+Make `scripts/run-fuzz-manifest.sh` run every manifest target with a selected duration and replay mode, enforce per-target input, allocation, recursion, memory, and timeout limits, and collect corpus paths without secrets.
+Pure Git parser targets call pure parser entry points, never spawn Git, and fail a test if a process-spawn seam is reached.
+Run every target for at least 10 seconds in CI on each change.
+Run scheduled Linux sanitizer campaigns for at least 30 minutes per target and retain corpora as CI artifacts for 30 days.
+Persist every crashing input as an ordinary deterministic fixture under `tests/fuzz-regressions/` and replay all fixtures in `cargo test --workspace`.
+
+- [ ] **Step 4: Add dependency and unsafe-code gates**
 
 Run `cargo deny check`, `cargo audit`, and a workspace scan for `unsafe` blocks.
 Require a written safety invariant and focused test for every accepted `unsafe` block.
 Fail CI on unreviewed new runtime dependencies.
 
-- [ ] **Step 4: Add platform behavior tests**
+- [ ] **Step 5: Add platform behavior tests**
 
 Exercise APFS and FSEvents behavior on macOS, inotify and watch limits on Linux, and NTFS rename, sharing, reserved-name, and antivirus-interference paths on Windows.
 Run x86-64 and ARM64 where the CI provider supports dedicated workers.
 
-- [ ] **Step 5: Write security and recovery documentation**
+- [ ] **Step 6: Write security and recovery documentation**
 
 Copy the approved threat boundaries, rollback limitation, fixed-base cleanup limitation, generated recovery phrase flow, custom-passphrase policy, offline-verifier disclosure, exact KDF bounds and cancellation honesty, Git bootstrap and history verification, and new-device recovery warning into focused user documentation.
 Explain that same-root-key rewrapping is credential maintenance rather than revocation because prior wrappers remain in public history.
@@ -2163,15 +2404,15 @@ Warn that compromise rekey copies no prior object or history and cannot restore 
 Do not claim resistance to a compromised unlocked endpoint.
 Keep `README.md` limited to user-facing installation, setup, and usage and put all security, architecture, recovery detail, and release evidence under `docs/`.
 
-- [ ] **Step 6: Record the architecture decision**
+- [ ] **Step 7: Record the architecture decision**
 
 Explain the Rust-only phase 1, separated core and TUI, in-process service contract, deferred bindings, and backend portability boundary.
 
-- [ ] **Step 7: Verify and commit**
+- [ ] **Step 8: Verify and commit**
 
-Run: `cargo test --workspace && cargo test -p notecrypt-e2e --test crash_recovery --test plaintext_canary --test presentation_journey --test recovery_journey && cargo deny check && cargo audit && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings`
+Run: `scripts/verify-fuzz-targets.sh && scripts/run-fuzz-manifest.sh --seconds-per-target 10 && cargo test --workspace && cargo test -p notecrypt-e2e --test crash_recovery --test plaintext_canary --test presentation_journey --test recovery_journey && cargo deny check && cargo audit && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings`
 
-Expected: all hardening, platform, policy, and documentation checks pass.
+Expected: manifest completeness, every fuzz smoke target, regression replay, hardening, platform, policy, and documentation checks pass.
 
 Commit: `test(security): add adversarial and platform hardening gates`
 
@@ -2189,6 +2430,8 @@ Commit: `test(security): add adversarial and platform hardening gates`
 - Create: `docs/performance-baseline.md`
 - Create: `docs/release-readiness.md`
 - Modify: `.github/workflows/ci.yml`
+- Modify: `fuzz/targets.toml`
+- Modify: `scripts/run-fuzz-manifest.sh`
 
 **Interfaces:**
 
@@ -2212,6 +2455,7 @@ Treat stretch targets as informational.
 - [ ] **Step 4: Verify security invariants after optimization**
 
 Re-run every cryptographic-profile substitution test, KDF floor and ceiling test, pre-call and post-call cancellation test, CSPRNG failure test, nonce uniqueness test, durability test, revocation-per-chunk test, stable-source test, fixed-base cleanup test, replication-budget test, bootstrap test, Git history-verification test, conflict test, canary test, backend-copy test, compromise-rekey test, and clean-device recovery test.
+Run every checked-in fuzz target for at least 10 minutes and replay the full retained and deterministic regression corpus.
 Reject any optimization that weakens KDF floors or ceilings, authentication, durability, cleanup ownership, graph completeness, Git isolation, bounded memory, or explicit leakage policy.
 
 - [ ] **Step 5: Conduct independent security review**
@@ -2227,7 +2471,7 @@ Record the exact release evidence and residual concerns in `docs/release-readine
 
 - [ ] **Step 7: Verify and commit**
 
-Run: `cargo test --workspace && cargo test -p notecrypt-e2e --test cli_journey --test tui_journey --test whole_vault --test git_sync --test presentation_journey --test recovery_journey --test plaintext_canary --test crash_recovery && cargo bench -p notecrypt-benches && cargo deny check && cargo audit`
+Run: `scripts/verify-fuzz-targets.sh && scripts/run-fuzz-manifest.sh --seconds-per-target 600 --replay-all && cargo test --workspace && cargo test -p notecrypt-e2e --test cli_journey --test tui_journey --test whole_vault --test git_sync --test presentation_journey --test recovery_journey --test plaintext_canary --test crash_recovery && cargo bench -p notecrypt-benches && cargo deny check && cargo audit`
 
 Expected: every acceptance criterion and hard performance budget passes, with no unresolved critical review finding.
 

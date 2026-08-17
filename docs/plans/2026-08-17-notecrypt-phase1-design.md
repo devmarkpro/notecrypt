@@ -4,6 +4,7 @@
 
 Approved for implementation planning on 2026-08-17.
 Security and architecture preflight corrections were incorporated on 2026-08-17 before Task 2 began.
+The unanimous contract re-review corrections were incorporated on 2026-08-17 before Task 2 began.
 
 ## Product Summary
 
@@ -97,7 +98,12 @@ These measures are defense in depth and are never described as absolute protecti
 
 An existing device stores its last trusted snapshot identity outside the encrypted repository and detects a remote that moves behind it.
 A new device recovering from only a passphrase and a malicious remote cannot prove that the remote supplied the newest valid snapshot.
-The recovery flow must disclose this limitation.
+After bootstrap, head, and complete graph authentication, clean-device recovery returns `RecoveryFreshness::UnprovableOnCleanDevice` before establishing the first trusted-remote baseline.
+This result is distinct from `RecoveryFreshness::Proven` and from `RollbackDetected` on an existing device.
+CLI automation fails closed unless the user supplies the explicit freshness acknowledgement option.
+The TUI presents a non-dismissible explanation and requires deliberate confirmation.
+After acknowledgement, Notecrypt atomically records the accepted snapshot and provenance that freshness was accepted as unprovable rather than proven.
+No output calls an older but cryptographically valid clean-device result latest or verified-fresh.
 
 ## Architecture
 
@@ -209,6 +215,7 @@ The store returns an opaque `UnlockedVault` capability that owns cryptographic k
 The service owns the user-visible unlock session, timers, cancellation, and policy while holding that capability until lock.
 Replication workers receive only bounded leases from the same capability and therefore stop at the same revocation boundaries as local edits.
 The service-owned workspace port carries an opaque stable-source handle and identity token so an adapter can validate the same source immediately before store publication.
+The service owns bounded zeroizing recovery-secret input and one-time presentation types that travel only through dedicated secret methods, never ordinary commands, results, events, snapshots, JSON, logs, or diagnostics.
 
 ### Adapters
 
@@ -221,6 +228,7 @@ Failure or absence of a supported credential store falls back to recovery-passph
 
 `notecrypt-editor-workspace` creates and supervises plaintext workspaces outside the encrypted repository.
 It provides platform-specific restrictive permissions and best-effort indexing and backup exclusions.
+It implements the service-owned coordination port with Unix `flock` or `fcntl` semantics and Windows file-sharing or `LockFileEx` semantics.
 
 ### UI and application
 
@@ -233,7 +241,7 @@ It provides platform-specific restrictive permissions and best-effort indexing a
 - Adapter crates implement ports but do not define domain policy.
 - Core cannot depend on any other Notecrypt crate.
 - Format and crypto remain independent implementations consumed by the store.
-- Service may depend on `notecrypt-crypto` only for the opaque, non-cloneable device-wrapping secret container used by its native-unlock port.
+- Service may depend on `notecrypt-crypto` only for narrow consuming recovery-secret and device-wrapping secret bridges used by dedicated internal ports.
 - No service command, result, event, UI DTO, or loggable type exposes the secret container or its bytes.
 - The store translates format-owned numeric wire identifiers into a crypto-owned authenticated-context value containing only bounded primitive fields.
 - Replication depends on backend abstractions and authenticated store operations, never on a concrete backend.
@@ -332,21 +340,29 @@ Cryptographic profile 1 is immutable once golden fixtures ship.
 All multi-field AAD and MAC inputs use canonical length-delimited `minicbor` arrays in the listed order.
 All XChaCha20-Poly1305 tags are 16 bytes, all keyed BLAKE3 authenticators and fingerprints are 32 bytes, and all comparisons are constant time.
 Wire algorithm identifiers are `0x0001` for XChaCha20-Poly1305, `0x0002` for keyed BLAKE3-256 authentication, `0x0003` for keyed BLAKE3-256 fingerprints, `0x0001` in the KDF namespace for Argon2id profile 1, and `0x0001` in the derivation namespace for HKDF-SHA-256 profile 1.
+Outer AEAD AAD contains only public envelope fields in this order: profile identifier, vault identifier, object kind, format version, object identifier, nonce, and ciphertext length.
+A field may be included only when the public envelope or an already authenticated parent reference makes it available.
+Logical file and revision identifiers, snapshot parents and device identifiers, tree entry counts, chunk counts, total plaintext lengths, content sequence, KDF policy semantics, provider references, and all other protected structure remain inside ciphertext.
+After successful authenticated decryption, the store validates every protected semantic against authenticated parent references, expected object kind, and profile bounds before returning a typed value.
 
 | Durable kind | Construction and key domain | Nonce | Canonical AAD or MAC coverage | Authenticator and size limit |
 | --- | --- | --- | --- | --- |
-| Recovery slot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the Argon2id recovery wrapping key | Fresh 24 CSPRNG bytes | Crypto profile, vault format version, vault ID, slot version, slot ID, KDF ID, salt, memory, iterations, and lanes | AEAD tag; exactly 32 plaintext key bytes and at most 4 KiB encoded slot bytes |
-| Device slot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the native device wrapping key | Fresh 24 CSPRNG bytes | Crypto profile, local-state version, vault ID, slot version, slot ID, provider ID, and complete provider reference | AEAD tag; exactly 32 plaintext key bytes and at most 8 KiB encoded record bytes |
-| Metadata envelope, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, object kind, format version, object ID, and plaintext length | AEAD tag; at most 1 MiB plaintext |
-| Logical tree, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, tree kind, format version, tree object ID, entry count, and plaintext length | AEAD tag; at most 256 MiB plaintext and 1,000,000 entries |
-| Revision manifest, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, manifest kind, format version, file ID, revision ID, object ID, chunk size, chunk count, total plaintext length, and manifest plaintext length | AEAD tag; at most 64 MiB plaintext and 1,048,576 chunks |
-| Snapshot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the metadata key plus keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/snapshot-authentication/v1` | Fresh 24 CSPRNG bytes for AEAD | Crypto profile, vault ID, snapshot kind, format version, snapshot ID, ordered parent IDs, tree object ID, device ID, and plaintext length; the outer MAC covers the complete canonical encrypted envelope | AEAD tag plus 32-byte MAC; at most 1 MiB plaintext and two parents |
+| Recovery slot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the Argon2id recovery wrapping key | Fresh 24 CSPRNG bytes | Allowed public outer fields only; KDF and slot semantics are encrypted or independently required for key derivation and validated after decryption | AEAD tag; exactly 32 plaintext key bytes and at most 4 KiB encoded slot bytes |
+| Device slot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the native device wrapping key | Fresh 24 CSPRNG bytes | Allowed public outer fields only; slot and provider semantics remain inside ciphertext | AEAD tag; exactly 32 plaintext key bytes and at most 8 KiB encoded record bytes |
+| Metadata envelope, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Allowed public outer fields only | AEAD tag; at most 1 MiB plaintext |
+| Logical tree, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Allowed public outer fields only; entry count and graph shape remain inside ciphertext | AEAD tag; at most 256 MiB plaintext and 1,000,000 entries |
+| Revision manifest, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Allowed public outer fields only; file ID, revision ID, chunk structure, and plaintext lengths remain inside ciphertext | AEAD tag; at most 64 MiB plaintext and 1,048,576 chunks |
+| Snapshot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the metadata key plus keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/snapshot-authentication/v1` | Fresh 24 CSPRNG bytes for AEAD | Allowed public outer fields only; parents, tree reference, device ID, and plaintext length remain inside ciphertext; the outer MAC covers the complete canonical encrypted envelope | AEAD tag plus 32-byte MAC; at most 1 MiB plaintext and two parents |
 | Authenticated head, profile `0x0001` | Keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/snapshot-authentication/v1` | None | Crypto profile, head version, vault ID, snapshot ID, snapshot object ID, tree object ID, and complete canonical head payload | 32-byte MAC; at most 64 KiB encoded head bytes |
-| Chunk-key wrapper, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/content-wrapping/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, chunk kind, format version, file ID, object ID, checked sequence, plaintext length, and content algorithm ID | AEAD tag; exactly 32 plaintext data-key bytes and at most 128 encoded wrapper bytes |
-| Content chunk, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with one fresh per-chunk data key | One fresh 16-byte CSPRNG domain per newly encrypted file revision followed by an 8-byte big-endian checked chunk sequence | Crypto profile, vault ID, chunk kind, format version, file ID, object ID, checked sequence, plaintext length, and chunk-key wrapper bytes | AEAD tag; at most 4 MiB plaintext plus 4 KiB framing |
+| Chunk-key wrapper, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/content-wrapping/v1` | Fresh 24 CSPRNG bytes | Allowed public outer fields only; file ID, sequence, plaintext length, and content semantics remain inside the wrapped payload or authenticated parent | AEAD tag; exactly 32 plaintext data-key bytes and at most 128 encoded wrapper bytes |
+| Content chunk, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with one fresh per-chunk data key | Fresh 24 CSPRNG bytes for each newly encrypted chunk | Allowed public outer fields only; content sequence, file identity, and plaintext length remain protected and are checked against the authenticated manifest after decryption | AEAD tag; at most 4 MiB plaintext plus 4 KiB framing |
 | Same-position chunk fingerprint, profile `0x0001` | Keyed BLAKE3 `0x0003` with HKDF domain `notecrypt/chunk-fingerprint/v1` | None | File ID, checked chunk position, plaintext length, and plaintext bytes | 32-byte fingerprint; input is one bounded content chunk |
 | Local-state record, profile `0x0001` | Keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/local-verification/v1` and a distinct label for trusted head, trusted remote, backend copy, cleanup, or device slot | None | Crypto profile, local-state version, vault ID, record type, record ID, payload length, and complete canonical payload | 32-byte MAC; at most 64 KiB encoded record bytes |
 
+`notecrypt-crypto` defines a distinct typed public context and typed plaintext or authenticated value for every profile row plus exact encrypt, decrypt, MAC, and verify operations.
+The context constructors accept only public envelope fields and authenticated parent references and cannot accept protected semantics as outer AAD.
+Cross-format cryptographic integration tests live in a neutral test package that depends on format and crypto, while format package tests remain structural and canonical only.
+Wire tests prove that protected identifiers, graph shape, entry counts, chunk structure, and per-file semantics never appear in public bytes.
 The store rejects cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, and modified-AAD substitutions before returning plaintext or trusted metadata.
 Each newly encrypted content chunk receives a fresh random data key and random object identity.
 The chunk data key is wrapped by the vault-derived content-wrapping key.
@@ -374,6 +390,10 @@ Recovery from a suspected credential or key compromise uses `CompromiseRekey`.
 `CompromiseRekey` creates a new vault ID, Vault Root Key, generated recovery phrase or explicitly confirmed custom passphrase, file identities, revision identities, object identities, bootstrap, and parentless current-state snapshot in an empty target backend.
 It streams the currently authenticated plaintext through bounded decrypt and fresh encryption pipelines and copies no old object, wrapper, snapshot parent, Git commit, or backend history.
 Already exposed ciphertext, wrappers, keys, and plaintext cannot be made confidential again.
+The source vault exposes only a revocable `CompromiseRekeySource` that enumerates authenticated logical entries and streams bounded plaintext under the source session generation.
+The distinct target is represented by a linear `PendingVaultTarget` that owns the new vault ID, root and recovery keys, logical identities, bootstrap, staged objects, verification state, abort cleanup, and one-way activation.
+Source and target identities or backends cannot alias.
+Partial targets cannot activate, aborted or activated targets cannot be reused, and no old identity, encrypted object, snapshot parent, or backend-native history may enter the target.
 
 ## Local Transaction Model
 
@@ -451,10 +471,16 @@ It never reports a clean lock while cleanup remains unconfirmed.
 
 All plaintext workspaces live directly below one fixed canonical Notecrypt-owned versioned workspace base.
 Each child name is the lowercase hexadecimal encoding of a CSPRNG-generated 128-bit `WorkspaceId` and no cleanup record stores or accepts an arbitrary path.
-Workspace creation follows reserve, register, create, activate, materialize ordering.
+Workspace enumeration and creation hold a short-lived OS-backed base coordination lock.
+Workspace creation acquires a per-workspace OS-backed ownership lock while still holding the base lock and retains ownership for the entire plaintext lifetime through verified removal.
+Workspace creation follows reserve, register, base lock, create and acquire ownership, activate, release base lock, then materialize ordering.
 The unlocked store capability reserves the identity and writes an authenticated registered cleanup record before the adapter creates the directory, then activates the record only after the adapter verifies restrictive permissions and base containment.
 Cleanup follows remove, verify absent, and unregister ordering, and only the store capability may authenticate or change the record state.
-At process startup, before any unlock, Notecrypt enumerates direct children of only the fixed application-owned base, refuses to follow symlinks, junctions, or reparse points, removes safe children by identity, and exposes no unlocked session until this cleanup finishes successfully.
+At process startup, before any unlock, cleanup holds the base lock, enumerates direct children of only the fixed application-owned base, refuses to follow symlinks, junctions, or reparse points, and attempts each ownership lock non-blockingly.
+Cleanup deletes only a workspace whose ownership lock it acquires.
+A held ownership lock proves a live workspace for cleanup purposes, is skipped, and is not reported as cleanup failure.
+PID files and timestamps may support diagnostics but never authorize deletion.
+Notecrypt exposes no unlocked session until this cleanup finishes successfully.
 Cleanup failure remains a blocking warning with retry or exit actions only.
 After unlock, the store authenticates cleanup records and reconciles them with that fixed-base sweep.
 
@@ -507,8 +533,9 @@ Backends without conditional head replacement cannot support unrestricted multi-
 They must advertise the limitation and run only in an explicitly selected single-writer mode.
 
 One backend is active and writable for a device at a time.
-`BackendCopy` means migration of the same vault ID, Vault Root Key, bootstrap, authenticated graph, and history between backends.
+`BackendCopy` means migration of the same vault ID, Vault Root Key, bootstrap, authenticated Notecrypt snapshot graph, and encrypted objects between backends.
 `BackendCopy` uses a separately configured target, copies and verifies the bootstrap and all reachable encrypted objects, conditionally publishes the same authenticated head, records completion, and only then permits switching the active backend.
+It preserves Notecrypt snapshot ancestry but does not promise identical backend-native Git commit identities or history.
 `CompromiseRekey` means creation of a new vault and history-free parentless current-state snapshot with all-new keys and encrypted identities.
 Same-vault `BackendCopy` is never offered as recovery from suspected credential or key compromise.
 Optional backup targets are read-only destinations from Notecrypt's perspective.
@@ -516,10 +543,18 @@ Optional backup targets are read-only destinations from Notecrypt's perspective.
 ## Revocable Replication Capability
 
 Raw store helpers remain crate-private and replication receives an object-safe `ReplicationLease` from the unlocked vault capability.
-The lease supports bounded local object-existence checks, authenticated quarantine import that returns typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, bounded reachable-graph traversal, streaming encrypted export, fast-forward or reconciled snapshot commit, and atomic trusted-remote observation recording.
+The lease supports bounded local object-existence checks, authenticated quarantine import that returns typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, bounded reachable-graph verification, streaming encrypted export, fast-forward or reconciled snapshot commit, and atomic trusted-remote observation recording.
 Every method checks the session generation before and after one bounded object or graph step and returns locked when revocation changes the generation.
 Imported bytes remain in quarantine until their kind, profile, canonical encoding, authentication, references, and declared lengths validate.
 Cancellation, timeout, authentication failure, or any limit failure removes the operation's quarantine data before returning.
+
+Successful bounded traversal returns one opaque `VerifiedReachableHead` that is non-cloneable, non-serializable, and consumable exactly once.
+It binds the vault ID, session generation, authenticated bootstrap and head identities, every reachable snapshot and object identity, effective limit profile, operation ID, and exact backend observation.
+The store represents that observation through bounded canonical bytes in `BackendObservationFingerprint`, never a backend-owned type.
+`commit_replicated_snapshot` consumes `VerifiedReachableHead` and returns `CommittedReachableHead` only after a fast-forward or reconciled local commit.
+No-change and already-current paths consume the proof through an explicit no-local-commit transition that also returns `CommittedReachableHead`.
+`record_trusted_remote` consumes `CommittedReachableHead` and atomically records the matching observation.
+Revocation, a changed effective limit profile, a different observation, partial traversal, or reuse invalidates the transition and cannot advance local or trusted-remote state.
 
 Replication budget profile 1 applies the stricter of these limits, backend-advertised limits, and local available-space limits.
 
@@ -550,11 +585,19 @@ Every invocation sets `core.hooksPath` to an empty trusted Notecrypt-owned direc
 Internal publication uses `push --no-verify` so user or repository hooks cannot execute inside the trusted process.
 The runner removes every inherited `GIT_*` variable.
 It then sets only Notecrypt-controlled `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_TERMINAL_PROMPT`, `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_GLOBAL`, and `GIT_PAGER` values needed for neutral commits, explicit prompt policy, isolated configuration, and non-paged output.
-It rejects local `include` and `includeIf` directives, aliases, filters, submodule configuration, pager configuration, replace references, custom credential commands outside the selected Git credential mechanism, custom SSH commands, and unrecognized remote-helper schemes.
+For HTTPS, it resolves only the trusted Git-shipped HTTPS helper beneath the canonical trusted exec path belonging to the selected Git installation.
+For SSH, it invokes one explicitly approved canonical SSH executable with controlled arguments and imports only the approved SSH agent connection needed for that operation.
+For credential storage, it imports exactly one selected trusted credential provider into a generated isolated configuration and rejects repository-controlled credential keys or substitutions.
+It rejects local `include` and `includeIf` directives, aliases, filters, submodule configuration, pager configuration, replace references, repository-controlled credential commands, custom SSH commands, exec-path substitutions, environment substitutions, and unrecognized remote-helper schemes.
 Protocol policy defaults to deny, explicitly permits configured HTTPS and SSH remotes, and exposes local `file` transport only through a separate local or test capability that cannot be selected by remote configuration.
 The runner rejects `ext`, unknown URL schemes, symlinked Git control files, and repository modes other than regular files, directories, and the exact allowed encrypted paths.
 Before every operation it validates the repository marker, canonical absolute Git directory, worktree relationship, dedicated branch, configured remote, selected transport, and allowed local configuration.
 Git credentials remain under the user's Git credential configuration and are not copied into vault configuration.
+
+Every candidate fetch and ancestry verification receives `GitVerificationLimits` before Git starts.
+Profile 1 permits at most 1 TiB of raw downloaded pack bytes, 1 TiB of quarantine disk or 80 percent of starting free space when smaller, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, 30 minutes wall-clock time, and 30 seconds without bounded progress while preserving a 1 GiB free-space reserve.
+The adapter monitors the isolated quarantine and complete Git process tree during execution, terminates the process tree on cancellation or any breach, and removes quarantine on every failure.
+Replication limits run after unpacking as a second independent bound before authenticated graph acceptance and do not substitute for pack-ingestion limits.
 
 Synchronization performs fetch, authenticates reachable Notecrypt objects, reconciles snapshots if required, creates a Git tree and commit from a validated encrypted-file inventory using plumbing commands, and performs a normal fast-forward push from a private temporary ref.
 Notecrypt-generated commits use a fixed neutral author and committer identity and contain no logical vault name or file name in the commit message.
@@ -687,7 +730,7 @@ The durable content chunk size is selected from 1 MiB, 2 MiB, and 4 MiB after me
 The selected size is versioned in the file manifest.
 Changing the durable default after format release requires an explicit format decision and compatibility test.
 
-Chunk encryption uses a random nonce domain for every file revision and a provably unique nonce within that domain for every chunk.
+Chunk encryption uses a fresh 24-byte CSPRNG nonce for every newly encrypted chunk.
 Authenticated structure covers chunk order, chunk count, total plaintext length, and file identity so reordering, deletion, duplication, or truncation fails closed.
 Phase 1 does not add compression because its length leakage, decompression limits, and performance tradeoffs require a separate decision.
 
@@ -813,7 +856,11 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 
 ### Security tests
 
-- Fuzz every durable decoder and backend response parser.
+- Keep a checked-in manifest enumerating every durable decoder and cryptographic envelope; bootstrap, head, inventory, and backend response parser; Git remote URL, configuration, commit, tree, ref, and output parser; and replication graph-metadata and limit parser.
+- Verify manifest-to-target completeness in CI and run every target for at least 10 seconds on each change.
+- Run scheduled Linux sanitizer campaigns for at least 30 minutes per target with retained corpora and run every target for at least 10 minutes plus full regression-corpus replay during release verification.
+- Persist every crashing input as an ordinary deterministic regression fixture.
+- Pure Git parser fuzz targets never spawn Git and enforce their own input, allocation, recursion, memory, and timeout bounds.
 - Assert secrets cannot be formatted through compile-time tests.
 - Scan logs, crash reports, command arguments, Git commits, and repository paths for plaintext canaries.
 - Verify KDF parameter floors and bounded decoder allocations.
@@ -875,6 +922,7 @@ Phase 1 is complete only when:
 - A user can perform the complete local workflow without manually manipulating encrypted objects.
 - A user can recover the vault on a clean second device using only the Git repository and passphrase.
 - Clean-device recovery independently reads and validates the immutable bootstrap before authenticating the complete graph.
+- Clean-device recovery cannot establish its first trusted baseline until `FreshnessUnprovable` receives explicit human or automation acknowledgement and records that provenance.
 - Concurrent Git-backed edits preserve both versions deterministically.
 - A Git candidate is accepted only after every newly introduced history entry and the complete reachable Notecrypt graph verify in isolation.
 - The encrypted repository and Git history contain no plaintext canary, logical filename, extension, or directory name.
@@ -883,6 +931,9 @@ Phase 1 is complete only when:
 - Measured latency and memory budgets pass on the supported platform matrix.
 - Cleanup failures are visible and recoverable.
 - Workspace cleanup accepts only random identities below the fixed application-owned base and completes before unlock exposure.
+- Workspace cleanup coordinates through live OS-backed base and ownership locks and never deletes a workspace owned by another process.
+- Local or trusted-remote state advances only through the one-time verified-reachability proof sequence.
 - `CompromiseRekey` produces a parentless current-state snapshot in a new empty vault and never copies prior ciphertext or history.
 - Documentation explains the security guarantees, limitations, recovery procedure, and backup verification.
 - Independent review has not identified an unresolved critical cryptographic or format flaw.
+- CI, scheduled sanitizer campaigns, and release verification execute every target in the checked-in fuzz manifest and replay retained regression corpora.
