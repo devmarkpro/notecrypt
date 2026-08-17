@@ -6,6 +6,7 @@ Approved for implementation planning on 2026-08-17.
 Security and architecture preflight corrections were incorporated on 2026-08-17 before Task 2 began.
 The unanimous contract re-review corrections were incorporated on 2026-08-17 before Task 2 began.
 The non-forgeable capability and bounded-tooling corrections were incorporated on 2026-08-18 before Task 2 began.
+The final typed-envelope, committed-transition, checkpoint, and Git-thread corrections were incorporated on 2026-08-18 before Task 2 began.
 
 ## Product Summary
 
@@ -365,6 +366,9 @@ After successful authenticated decryption, the store validates every protected s
 `notecrypt-crypto` defines distinct typed public contexts and typed plaintext or authenticated values for every non-streaming profile row plus exact encrypt, decrypt, MAC, and verify operations.
 The bounded chunk fingerprint, key-wrap, and content-chunk operations belong to the Task 4 streaming module.
 The context constructors accept only public envelope fields and authenticated parent references and cannot accept protected semantics as outer AAD.
+Crypto-owned private-field envelope-part types represent every AEAD result, snapshot outer authenticator, head authenticator, local-state authenticator, chunk-key envelope, content-chunk envelope, and chunk fingerprint named by the typed APIs.
+Checked constructors validate public identity, kind, profile, nonce, ciphertext, tag, authenticator, fingerprint, and per-kind length before construction, while read-only or consuming accessors expose only public identity and authenticated bytes needed by the neutral format conversion.
+These types expose no plaintext, key material, protected semantic field, formatting, serialization, or unchecked construction surface.
 Cross-format cryptographic integration tests live in a neutral test package that depends on format and crypto, while format package tests remain structural and canonical only.
 Wire tests prove that protected identifiers, graph shape, entry counts, chunk structure, and per-file semantics never appear in public bytes.
 The store rejects cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, and modified-AAD substitutions before returning plaintext or trusted metadata.
@@ -558,6 +562,7 @@ The store represents that observation through bounded canonical bytes in `Backen
 Only store-internal verification may construct the token, including in tests through a development-only store test-support seam that runs the same binding and verification logic.
 `commit_replicated_snapshot` consumes `VerifiedReachableHead` and returns an equally private store-owned `CommittedReachableHead` only after a fast-forward or reconciled local commit.
 No-change and already-current paths consume the proof through an explicit no-local-commit transition that also returns `CommittedReachableHead`.
+The committed binding records only a private `FastForward`, `Reconciled`, or `NoLocalCommit` transition, and never retains caller-supplied `ReplicatedCommitMode` as proof state.
 `record_trusted_remote` consumes `CommittedReachableHead` and atomically records the matching observation.
 Revocation, a changed effective limit profile, a different observation, partial traversal, or reuse invalidates the transition and cannot advance local or trusted-remote state.
 Compile-fail tests prove external code cannot construct, clone, serialize, or debug-format either token, while runtime tests prove reuse and every binding mismatch fail closed.
@@ -603,8 +608,8 @@ Before every operation it validates the repository marker, canonical absolute Gi
 Git credentials remain under the user's Git credential configuration and are not copied into vault configuration.
 
 Every candidate fetch and ancestry verification receives `GitVerificationLimits` before Git starts.
-Profile 1 permits at most 1 TiB of raw downloaded pack bytes, 256 MiB for one inflated object, 1 TiB of aggregate expanded bytes further reduced by available space and operation limits, 1 TiB of quarantine disk or 80 percent of starting free space when smaller, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, delta depth 50, 1 GiB aggregate process-tree RSS, 1.5 GiB per-process address space, 8 processes, 2 threads per process, 3,600 seconds aggregate process-tree CPU, 30 minutes wall-clock time, and 30 seconds without bounded progress while preserving a 1 GiB free-space reserve.
-Git resource knobs reduce worker, thread, pack-window, and delta depth before ingestion begins.
+Profile 1 permits at most 1 TiB of raw downloaded pack bytes, 256 MiB for one inflated object, 1 TiB of aggregate expanded bytes further reduced by available space and operation limits, 1 TiB of quarantine disk or 80 percent of starting free space when smaller, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, delta depth 50, 1 GiB aggregate process-tree RSS, 1.5 GiB per-process address space, 8 processes, 2 worker threads and 3 total threads per process, 3,600 seconds aggregate process-tree CPU, 30 minutes wall-clock time, and 30 seconds without bounded progress while preserving a 1 GiB free-space reserve.
+Git resource knobs cap pack and index workers at two, while the independent monitor rejects a third worker or fourth total thread.
 Linux uses a dedicated cgroup with `cpu.stat` `usage_usec`, `cpu.max` capped at two cores, memory and process limits, plus a per-process address-space limit, and an `RLIMIT` plus watchdog fallback only when the same complete child-tree accounting is proven.
 Windows uses one Job Object with per-job user-time, CPU rate control, memory, process, and child-assignment enforcement plus watchdog accounting for each process's virtual address space.
 macOS uses a process group with a 50 ms watchdog that sums process-group CPU and RSS, with `RLIMIT_CPU` and address-space limits as secondary controls.
@@ -628,7 +633,7 @@ Onboarding installs managed defense-in-depth hooks that reject known plaintext w
 Hooks are not the confidentiality boundary because users and tools can bypass them.
 `notecrypt vault backup` independently validates the encrypted layout before committing or pushing.
 Tests inject hostile hooks, configuration includes, SSH commands, non-allowlisted helpers and providers, pagers, `GIT_*` variables, replace objects, filters, missing blobs, corrupt objects, false committed outcomes, and false readback.
-Adversarial ingestion tests cross each pack, inflated-object, aggregate-expanded-byte, quarantine, object, commit, ancestry, delta, RSS, address-space, process, thread, aggregate CPU, wall, progress, and free-space boundary and prove escaped children or unavailable accounting fail closed with whole-tree termination and quarantine cleanup.
+Adversarial ingestion tests cross each pack, inflated-object, aggregate-expanded-byte, quarantine, object, commit, ancestry, delta, RSS, address-space, process, worker-thread, total-thread, aggregate CPU, wall, progress, and free-space boundary, including rejection of a third worker and fourth total thread, and prove escaped children or unavailable accounting fail closed with whole-tree termination and quarantine cleanup.
 
 ## Application Service Contract
 

@@ -306,6 +306,10 @@ Commit: `feat(core): add vault tree and deterministic reconciliation`
 - Modify: `crates/notecrypt-crypto/src/lib.rs`
 - Test: `crates/notecrypt-crypto/tests/domain_separation.rs`
 - Test: `crates/notecrypt-crypto/tests/recovery_credentials.rs`
+- Test: `crates/notecrypt-crypto/tests/envelope_parts.rs`
+- Test: `crates/notecrypt-crypto/tests/compile_fail/envelope_construct.rs`
+- Test: `crates/notecrypt-crypto/tests/compile_fail/envelope_debug.rs`
+- Test: `crates/notecrypt-crypto/tests/compile_fail/envelope_serialize.rs`
 
 **Interfaces:**
 
@@ -397,6 +401,56 @@ pub struct TreePlaintext(Vec<u8>);
 pub struct ManifestPlaintext(Vec<u8>);
 pub struct SnapshotPlaintext(Vec<u8>);
 
+pub struct AeadEnvelopeParts {
+    identity: PublicEnvelopeIdentity,
+    nonce: [u8; 24],
+    ciphertext: Vec<u8>,
+    tag: [u8; 16],
+}
+
+impl AeadEnvelopeParts {
+    pub fn try_new(identity: PublicEnvelopeIdentity, nonce: &[u8], ciphertext: Vec<u8>, tag: &[u8]) -> Result<Self, CryptoError>;
+    pub fn identity(&self) -> &PublicEnvelopeIdentity;
+    pub fn nonce(&self) -> &[u8; 24];
+    pub fn ciphertext(&self) -> &[u8];
+    pub fn tag(&self) -> &[u8; 16];
+}
+
+pub trait TypedAeadEnvelope: Sized {
+    fn try_from_parts(parts: AeadEnvelopeParts) -> Result<Self, CryptoError>;
+    fn parts(&self) -> &AeadEnvelopeParts;
+    fn into_parts(self) -> AeadEnvelopeParts;
+}
+
+pub struct RecoverySlotEnvelope(AeadEnvelopeParts);
+pub struct DeviceSlotEnvelope(AeadEnvelopeParts);
+pub struct MetadataEnvelope(AeadEnvelopeParts);
+pub struct TreeEnvelope(AeadEnvelopeParts);
+pub struct ManifestEnvelope(AeadEnvelopeParts);
+pub struct SnapshotEnvelope {
+    encrypted: AeadEnvelopeParts,
+    outer_authenticator: [u8; 32],
+}
+pub struct HeadAuthenticator([u8; 32]);
+pub struct LocalStateAuthenticator([u8; 32]);
+
+impl SnapshotEnvelope {
+    pub fn try_new(encrypted: AeadEnvelopeParts, outer_authenticator: &[u8]) -> Result<Self, CryptoError>;
+    pub fn encrypted_parts(&self) -> &AeadEnvelopeParts;
+    pub fn outer_authenticator(&self) -> &[u8; 32];
+    pub fn into_parts(self) -> (AeadEnvelopeParts, [u8; 32]);
+}
+
+impl HeadAuthenticator {
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, CryptoError>;
+    pub fn as_bytes(&self) -> &[u8; 32];
+}
+
+impl LocalStateAuthenticator {
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, CryptoError>;
+    pub fn as_bytes(&self) -> &[u8; 32];
+}
+
 pub fn encrypt_recovery_slot(context: &RecoverySlotContext, value: RecoverySlotPlaintext, key: &RecoveryWrappingKey, random: &mut dyn SecureRandom) -> Result<RecoverySlotEnvelope, CryptoError>;
 pub fn decrypt_recovery_slot(context: &RecoverySlotContext, envelope: &RecoverySlotEnvelope, key: &RecoveryWrappingKey) -> Result<RecoverySlotPlaintext, CryptoError>;
 pub fn encrypt_device_slot(context: &DeviceSlotContext, value: DeviceSlotPlaintext, key: &DeviceWrappingKey, random: &mut dyn SecureRandom) -> Result<DeviceSlotEnvelope, CryptoError>;
@@ -431,6 +485,10 @@ pub fn derive_vault_keys(root: &VaultRootKey) -> Result<VaultKeys, CryptoError>;
 
 `generate_recovery_phrase` consumes exactly 128 CSPRNG bits and encodes BIP39 English version 1 as 12 words plus checksum.
 Each Task 3 context newtype has a checked constructor that accepts only `PublicEnvelopeIdentity` and rejects the wrong object kind or profile.
+Implement `TypedAeadEnvelope` for `RecoverySlotEnvelope`, `DeviceSlotEnvelope`, `MetadataEnvelope`, `TreeEnvelope`, and `ManifestEnvelope`.
+Each typed constructor validates its exact kind, profile, public identity, ciphertext bound, nonce length, and tag length before construction.
+Keep every envelope and authenticator field private, expose no unchecked constructor, and implement neither formatting nor serialization.
+Accessors expose only public identity, nonce, ciphertext, tag, or authenticator bytes required by Task 5 neutral conversion and never expose plaintext, a key, or protected semantics.
 Encryption constructs AAD internally from the public identity, generated public nonce, and resulting ciphertext length.
 No context accepts logical file or revision IDs, snapshot parents or device IDs, tree or chunk counts, total plaintext length, sequence, provider reference, or other protected semantics.
 Typed plaintext constructors keep those semantics encrypted, and store conversion validates them against authenticated parent references after decryption.
@@ -444,6 +502,7 @@ Do not claim or simulate interruption inside one Argon2id library call.
 - [ ] **Step 3: Write failing key-slot tests**
 
 Cover generated phrase entropy and checksum, deterministic decoding, custom policy boundaries, recovery wrapping, wrong passphrase, modified salt, modified vault ID, modified algorithm identifier, independent derived subkeys, and offline-verifier disclosure text.
+Round-trip each non-streaming typed envelope through its checked parts accessors, reject wrong kind, profile, nonce, tag, authenticator, and per-kind length, and use Trybuild to reject direct field construction, debug formatting, and serialization.
 Test each KDF field at its minimum, maximum, maximum plus one, zero, and `u32::MAX` together with checked byte-count and platform allocation overflow.
 Test cancellation before Argon2id and cancellation set after computation but before derived-key publication using an instrumented KDF seam.
 
@@ -471,6 +530,9 @@ Commit: `feat(crypto): add passphrase recovery and key hierarchy`
 - Create: `crates/notecrypt-crypto/src/stream.rs`
 - Modify: `crates/notecrypt-crypto/src/lib.rs`
 - Test: `crates/notecrypt-crypto/tests/stream_integrity.rs`
+- Test: `crates/notecrypt-crypto/tests/chunk_envelope_parts.rs`
+- Test: `crates/notecrypt-crypto/tests/compile_fail/chunk_envelope_debug.rs`
+- Test: `crates/notecrypt-crypto/tests/compile_fail/chunk_fingerprint_serialize.rs`
 - Benchmark: `benches/src/crypto.rs`
 - Create: `benches/baselines/chunk-size-v1.json`
 
@@ -490,7 +552,7 @@ Format and store tests cover revision-manifest reordering, missing chunks, dupli
 ```rust
 pub struct EncryptedChunkDescriptor {
     pub object_id: [u8; 32],
-    pub fingerprint: [u8; 32],
+    pub fingerprint: ChunkFingerprint,
     pub sequence: u64,
     pub plaintext_bytes: u32,
 }
@@ -505,6 +567,14 @@ pub struct ContentChunkContext(PublicEnvelopeIdentity);
 pub struct ChunkFingerprintContext;
 pub struct ChunkKeyPlaintext(secrecy::SecretBox<[u8; 32]>);
 pub struct ContentChunkPlaintext(Vec<u8>);
+pub struct ChunkKeyEnvelope(AeadEnvelopeParts);
+pub struct ContentChunkEnvelope(AeadEnvelopeParts);
+pub struct ChunkFingerprint([u8; 32]);
+
+impl ChunkFingerprint {
+    pub fn try_from_protected_bytes(bytes: &[u8]) -> Result<Self, CryptoError>;
+    pub fn into_protected_bytes(self) -> [u8; 32];
+}
 
 pub fn wrap_chunk_key(context: &ChunkKeyWrapContext, value: ChunkKeyPlaintext, key: &ContentWrappingKey, random: &mut dyn SecureRandom) -> Result<ChunkKeyEnvelope, CryptoError>;
 pub fn unwrap_chunk_key(context: &ChunkKeyWrapContext, envelope: &ChunkKeyEnvelope, key: &ContentWrappingKey) -> Result<ChunkKeyPlaintext, CryptoError>;
@@ -516,6 +586,8 @@ pub fn verify_chunk_fingerprint(context: &ChunkFingerprintContext, protected_sem
 ```
 
 Implement the Task 4 `fingerprint_chunk`, `verify_chunk_fingerprint`, `wrap_chunk_key`, `unwrap_chunk_key`, `encrypt_content_chunk`, and `decrypt_content_chunk` signatures without adding a whole-stream key-bearing API.
+Implement Task 3's `TypedAeadEnvelope` contract for `ChunkKeyEnvelope` and `ContentChunkEnvelope` with exact kind, profile, public-identity, nonce, ciphertext-bound, and tag checks.
+Keep `ChunkFingerprint` private-field, non-formatting, and non-serializable, accept only exactly 32 protected bytes, and expose those bytes only through its consuming protected-value accessor for Task 5 conversion.
 These functions borrow key material for one bounded chunk call only.
 The store owns the reader loop, session-generation checks, descriptor reuse decision, and bounded buffers in Task 6.
 Generate a fresh data key, 24-byte wrapping nonce, and independent 24-byte content nonce for every newly encrypted chunk.
@@ -526,6 +598,7 @@ Do not define or encode additional public nonce metadata.
 Return keyed fingerprints only to the unlocked store pipeline so it can compare the prior descriptor at the same file position before choosing reuse or fresh encryption.
 Reject plaintext above 4 MiB and keep at most two chunk buffers live per store pipeline.
 Return no descriptor or encoded bytes after a CSPRNG, wrap, encryption, authentication, or length failure.
+Round-trip the two chunk envelopes and fingerprint through checked constructors and accessors, reject every wrong length or kind, and use Trybuild to reject direct construction, formatting, and serialization.
 
 - [ ] **Step 3: Establish streaming baselines**
 
@@ -639,6 +712,7 @@ Encode recovery slots, device slots, metadata, trees, manifests, snapshots, auth
 
 Build the neutral `notecrypt-crypto-format-tests` package with dependencies on `notecrypt-format` and `notecrypt-crypto` and no dependency on store or service.
 Round-trip every profile row between canonical format envelopes and the exact Task 3 and Task 4 typed crypto APIs.
+Convert every named crypto-owned envelope, authenticator, and fingerprint through only its checked constructor and accessor surface and prove canonical format conversion needs no private-field or secret access.
 Prove cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, modified public AAD, modified ciphertext, and modified authenticator rejection.
 Scan public wire bytes to prove logical file and revision IDs, snapshot parents and device IDs, tree entry counts, chunk counts, total plaintext lengths, content sequence, graph shape, and per-file structure do not appear.
 
@@ -841,10 +915,15 @@ struct VerifiedReachableBinding {
     observation: BackendObservationFingerprint,
     operation: ReplicationOperationId,
 }
+enum CommittedTransition {
+    FastForward,
+    Reconciled,
+    NoLocalCommit,
+}
 struct CommittedReachableBinding {
     verified: VerifiedReachableBinding,
     local_snapshot: SnapshotId,
-    transition: ReplicatedCommitMode,
+    transition: CommittedTransition,
 }
 pub struct VerifiedReachableHead {
     binding: VerifiedReachableBinding,
@@ -968,6 +1047,8 @@ Keep `VerifiedReachableBinding` and `CommittedReachableBinding` private to `note
 Make `VerifiedReachableHead`, `CommittedReachableHead`, `CompromiseRekeySource`, and `PendingVaultTarget` non-cloneable, non-serializable, non-formatting, non-defaultable, and bound to the active session generation.
 Bind `VerifiedReachableHead` to the vault, authenticated bootstrap and head, exact reachable identities, effective limits, canonical `BackendObservationFingerprint`, and operation ID.
 Require the consuming sequence `verify_reachable` to either `commit_replicated_snapshot` or `accept_current_verified`, then to consuming `record_trusted_remote`.
+Map a successfully applied `ReplicatedCommitMode` into private `CommittedTransition::FastForward` or `CommittedTransition::Reconciled`, and make `accept_current_verified` construct only `CommittedTransition::NoLocalCommit` after proving the local head is already current.
+Never retain caller-supplied `ReplicatedCommitMode` inside `CommittedReachableBinding`.
 Reject partial traversal, stale generation, changed limits, changed observation, changed operation, duplicate use, or unmatched provenance before local or trusted-remote state changes.
 Use Trybuild callers outside the store crate to prove construction, clone, serialization, and debug formatting fail for both proof types.
 Use runtime tests to prove token reuse and every vault, generation, bootstrap, head, reachable-set, limits, observation, operation, and provenance mismatch fail closed.
@@ -1020,7 +1101,7 @@ Record a trusted remote observation atomically only after the replication lease 
 
 Exercise infinite inventory, trickle reads, every oversized object kind, excessive object count, excessive graph depth, aggregate-byte exhaustion, timeout, disk-budget exhaustion, cancellation, and lock.
 Assert typed referenced-object metadata for successful imports and complete quarantine removal for every failure.
-Exercise partial traversal, stale session, different effective limits, different observation fingerprints, different operation IDs, proof reuse, no-change consumption, commit failure, record failure, and attempted trusted-state advancement without the exact linear token sequence.
+Exercise partial traversal, stale session, different effective limits, different observation fingerprints, different operation IDs, proof reuse, fast-forward, reconciliation, exact no-local-commit construction, rejection of caller-selected no-local-commit state, commit failure, record failure, and attempted trusted-state advancement without the exact linear token sequence.
 Exercise source and target aliasing, partial activation, old identity injection, old history injection, abort cleanup, activation reuse, abort reuse, and revocation while streaming compromise plaintext.
 Exercise startup base enumeration, reserve/register/activate/remove/unregister failures, stale records, symlinks, junctions, reparse points, and attempts to register arbitrary paths.
 
@@ -2202,9 +2283,9 @@ Prove `BackendCopy` preserves the Notecrypt snapshot graph without promising bac
 
 - [ ] **Step 7: Verify Checkpoint B and commit**
 
-Run: `cargo test -p notecrypt-core && cargo test -p notecrypt-replication --test sync_matrix --test migration --test limits --test reachability_proof --test compromise_rekey && cargo test -p notecrypt-service --test recovery_freshness`
+Run: `cargo test -p notecrypt-core && cargo test -p notecrypt-replication --test sync_matrix --test migration --test limits --test reachability_proof --test compromise_rekey && cargo test -p notecrypt-service --test recovery_freshness --test security_transitions`
 
-Expected: bounded sync preserves authenticated content, limits clean quarantine, the dev-only scripted repository cannot forge proof tokens, linear proofs prevent misuse, freshness acknowledgement records exact provenance only after consuming confirmation, backend copy preserves the Notecrypt graph, compromise rekey creates a distinct verified history-free target, and no stale head is overwritten.
+Expected: bounded sync preserves authenticated content, limits clean quarantine, the dev-only scripted repository cannot forge proof tokens, linear proofs prevent misuse, freshness acknowledgement records exact provenance only after consuming confirmation, `security_transitions` gates compromise-rekey credentials plus pending-capability forge, mismatch, cancel, and drop behavior, backend copy preserves the Notecrypt graph, compromise rekey creates a distinct verified history-free target, and no stale head is overwritten.
 
 Commit: `feat(sync): add authenticated replication and conflicts`
 
@@ -2285,7 +2366,8 @@ pub struct GitVerificationLimits {
     pub max_process_tree_rss_bytes: u64,
     pub max_process_address_space_bytes: u64,
     pub max_processes: u32,
-    pub max_threads_per_process: u32,
+    pub max_worker_threads_per_process: u32,
+    pub max_total_threads_per_process: u32,
     pub max_aggregate_process_tree_cpu: std::time::Duration,
     pub max_wall_time: std::time::Duration,
     pub progress_interval: std::time::Duration,
@@ -2306,7 +2388,7 @@ Generate an isolated configuration containing exactly one canonical allowlisted 
 Reject every other helper or provider, including non-allowlisted, repository-controlled, path-substituted, and remote-scheme-selected helpers.
 Never execute Git aliases, hooks, non-allowlisted external helpers, pagers, filters, or a shell.
 Before every operation validate the repository marker, canonical absolute Git directory, worktree relationship, dedicated branch, configured remote, selected transport, and complete allowed local configuration.
-Set `GitVerificationLimits::PHASE_1` to 1 TiB raw pack bytes, 256 MiB for one inflated object, 1 TiB aggregate expanded bytes reduced further by available space and operation limits, the smaller of 1 TiB and 80 percent of starting free space for quarantine, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, delta depth 50, 1 GiB aggregate process-tree RSS, 1.5 GiB per-process address space, 8 processes, 2 threads per process, 3,600 seconds aggregate process-tree CPU, 30 minutes wall time, 30 seconds progress interval, and a 1 GiB free-space reserve.
+Set `GitVerificationLimits::PHASE_1` to 1 TiB raw pack bytes, 256 MiB for one inflated object, 1 TiB aggregate expanded bytes reduced further by available space and operation limits, the smaller of 1 TiB and 80 percent of starting free space for quarantine, 20,000,000 Git objects, 100,000 commits, 100,000 ancestry edges, delta depth 50, 1 GiB aggregate process-tree RSS, 1.5 GiB per-process address space, 8 processes, 2 worker threads and 3 total threads per process, 3,600 seconds aggregate process-tree CPU, 30 minutes wall time, 30 seconds progress interval, and a 1 GiB free-space reserve.
 
 - [ ] **Step 3: Implement Git backend conformance**
 
@@ -2319,7 +2401,7 @@ On commit, construct validated trees with `git mktree`, create one commit with `
 Treat `ls-remote` as ref discovery only.
 Fetch the exact discovered candidate into an isolated quarantine repository with no alternates before advancing visible state.
 Pass `GitVerificationLimits` into every candidate fetch and ancestry verification before Git starts.
-Before ingestion begins set trusted command-line configuration for `fetch.parallel=1`, `pack.threads=2`, `index.threads=2`, `pack.depth=50`, `pack.windowMemory=256m`, and `core.deltaBaseCacheLimit=256m`, then independently enforce the harder process-tree and parsed-pack ceilings.
+Before ingestion begins set trusted command-line configuration for `fetch.parallel=1`, `pack.threads=2`, `index.threads=2`, `pack.depth=50`, `pack.windowMemory=256m`, and `core.deltaBaseCacheLimit=256m`, then independently enforce at most two worker threads and three total threads per process plus the harder process-tree and parsed-pack ceilings.
 Monitor raw downloaded pack bytes, single inflated object bytes, aggregate expanded bytes, quarantine disk, Git object and commit counts, ancestry and delta depth, aggregate process-tree RSS and CPU, per-process address space, process and thread counts, wall time, bounded progress, and free-space reserve while the complete process tree runs.
 On Linux require a dedicated cgroup with `cpu.stat` `usage_usec`, `cpu.max` capped at two cores, memory and process limits, plus per-process `RLIMIT_AS` at 1.5 GiB, or use an `RLIMIT` plus process-tree watchdog fallback only when it proves the same complete child-tree attachment and aggregate accounting.
 On Windows require one Job Object with per-job user-time, CPU rate control, memory, process, and child-assignment enforcement plus watchdog accounting of each process's virtual address space.
@@ -2355,7 +2437,7 @@ Return indeterminate rather than success on bootstrap, candidate fetch, history,
 
 Create two local clones and a bare remote.
 Exercise independent changes, same-file conflicts, push races, remote deletion, malformed remote objects, missing blobs, corrupt objects, a clean tip with an unsafe intermediate commit, false committed outcomes, false `ls-remote` readback, bootstrap mismatch, backup readback failure, and clean-device recovery.
-Exercise a 256 MiB plus one byte inflated object, aggregate expanded-byte exhaustion, raw-pack and quarantine exhaustion, excessive object and commit counts, ancestry depth, delta depth 51, aggregate process-tree RSS above 1 GiB, per-process address space above 1.5 GiB, a ninth process, a third thread, aggregate process-tree CPU above 3,600 seconds through fake accounting, trickle fetch, cancellation, 30-minute wall timeout, escaped-child attempts, unavailable complete-tree accounting, and independent post-unpack replication-limit failure.
+Exercise a 256 MiB plus one byte inflated object, aggregate expanded-byte exhaustion, raw-pack and quarantine exhaustion, excessive object and commit counts, ancestry depth, delta depth 51, aggregate process-tree RSS above 1 GiB, per-process address space above 1.5 GiB, a ninth process, a third worker thread, a fourth total thread, aggregate process-tree CPU above 3,600 seconds through fake accounting, trickle fetch, cancellation, 30-minute wall timeout, escaped-child attempts, unavailable complete-tree accounting, and independent post-unpack replication-limit failure.
 Assert each platform controller attaches every descendant before work, measures aggregate CPU correctly, kills the whole tree on breach, preserves the free-space reserve, and removes quarantine on every failure.
 Scan every Git commit, path, blob, log line, and process argument for unique plaintext canaries and logical names.
 
