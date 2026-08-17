@@ -3,6 +3,7 @@
 ## Status
 
 Approved for implementation planning on 2026-08-17.
+Security and architecture preflight corrections were incorporated on 2026-08-17 before Task 2 began.
 
 ## Product Summary
 
@@ -20,8 +21,8 @@ Git is the first backend.
 At the end of phase 1, a user can:
 
 - Initialize a vault in an empty local directory or a dedicated Git repository.
-- Recover the vault on another computer using the encrypted repository and recovery passphrase.
-- Unlock the vault using the recovery passphrase.
+- Generate and display a cryptographically random recovery phrase once during initialization, confirm that it was recorded, and recover the vault on another computer using the encrypted repository and that phrase.
+- Unlock the vault using the generated recovery phrase or an explicitly confirmed custom recovery passphrase.
 - Optionally configure a device-local unlock slot backed by the operating-system credential store.
 - Browse the logical file tree in the TUI without exposing names in the encrypted repository.
 - Create, import, edit, rename, move, export, and delete text or binary files.
@@ -163,9 +164,11 @@ It identifies cryptographic algorithms but does not implement them.
 ### `notecrypt-crypto`
 
 This crate owns reviewed cryptographic composition.
-It provides Argon2id passphrase derivation, XChaCha20-Poly1305 authenticated encryption, HKDF-SHA-256 domain-separated subkeys, keyed BLAKE3 chunk fingerprints, random object identities, random data keys, and streaming chunk encryption.
+It provides bounded Argon2id passphrase derivation, XChaCha20-Poly1305 authenticated encryption, HKDF-SHA-256 domain-separated subkeys, keyed BLAKE3 chunk fingerprints and local-state authenticators, random object identities, random data keys, recovery-phrase generation, and per-chunk encryption primitives.
 It exposes secret-bearing types that do not implement `Clone`, `Debug`, `Display`, or serialization traits.
 It zeroizes owned secret buffers on drop on a best-effort basis.
+Every cryptographic random value comes from the operating-system CSPRNG.
+A CSPRNG failure is a hard operation failure and no bootstrap, key slot, object, snapshot, local record, or head is published from that operation.
 
 ### `notecrypt-store`
 
@@ -177,17 +180,22 @@ Unix, macOS, and Windows implementations remain internal store modules, while fa
 The store exposes a repository trait implemented by `VaultStore` so service tests can use blocking and failing fakes without depending on adapter crates.
 Key-required reads, mutations, recovery, and replication access exist only on revocable unlocked capabilities.
 Raw store helpers remain crate-private so no caller can bypass session lock or key revocation.
+Streaming encryption and decryption acquire a short-lived key guard for one bounded chunk, verify the session generation before and after that chunk, and retain no raw key reference between chunks.
+Replication receives a separate object-safe lease with explicit graph, time, byte, object-count, and quarantine-disk budgets.
+Authenticated cleanup registration, activation, verification, and deregistration are store-capability operations.
 
 ### `notecrypt-backend`
 
 This crate owns the backend service-provider interface.
 It contains backend-neutral opaque object and head types plus explicit capability and limit declarations.
+It includes bounded typed bootstrap read and create-if-absent operations.
 It provides a reusable conformance test suite for backend adapters.
 
 ### `notecrypt-replication`
 
 This crate owns synchronization and migration workflows.
 It fetches encrypted objects, requests authentication through the store, compares snapshots, reconciles logical metadata, preserves conflicts, publishes with an expected remote head, verifies readback, and resumes interrupted backend migrations.
+It proves that the complete authenticated graph is present before accepting or publishing a head.
 It never depends directly on Git.
 
 ### `notecrypt-service`
@@ -200,12 +208,13 @@ Adapters depend inward on those traits and the service never depends on an adapt
 The store returns an opaque `UnlockedVault` capability that owns cryptographic key material and authenticated repository operations.
 The service owns the user-visible unlock session, timers, cancellation, and policy while holding that capability until lock.
 Replication workers receive only bounded leases from the same capability and therefore stop at the same revocation boundaries as local edits.
+The service-owned workspace port carries an opaque stable-source handle and identity token so an adapter can validate the same source immediately before store publication.
 
 ### Adapters
 
-`notecrypt-backend-git` implements encrypted-object replication using the installed Git executable through argument arrays, never through a shell.
+`notecrypt-backend-git` implements encrypted-object replication using one hardened installed-Git runner for onboarding, fetch, sync, backup, backend copy, and recovery.
 This choice preserves mature GitHub and GitLab authentication across the three desktop operating systems.
-The adapter validates repository state, isolates command arguments, disables command aliases, constructs commits through plumbing commands that bypass worktree content filters and hooks, and treats Git output as untrusted input.
+The runner uses argument arrays without a shell, sanitizes Git configuration and environment state, constrains transports, validates repository identity on every operation, bypasses hooks for internal publication, and treats Git output as untrusted input.
 
 `notecrypt-device-unlock` integrates with the native credential store.
 Failure or absence of a supported credential store falls back to recovery-passphrase unlock.
@@ -233,6 +242,7 @@ It provides platform-specific restrictive permissions and best-effort indexing a
 - `anyhow` errors cannot cross a crate's public boundary.
 - Durable data never relies on Rust type layout or default serializer behavior.
 - Cargo features are additive capabilities, not mutually exclusive backend selectors.
+- `notecrypt-format` owns numeric algorithm and profile identifiers, `notecrypt-crypto` owns typed authenticated contexts, and `notecrypt-store` performs the only explicit translation between them.
 
 CI enforces these rules using package-level dependency checks and platform build matrices.
 
@@ -249,8 +259,10 @@ vault-root/
 └── head
 ```
 
-`.notecrypt-vault` contains only the magic value, vault-format version, random vault identifier, KDF parameters, and recovery wrapped-key slots.
+`.notecrypt-vault` contains only the magic value, vault-format version, cryptographic-profile identifier, random vault identifier, KDF parameters, and recovery wrapped-key slots.
 It contains no logical names, file extensions, directory structure, remote credentials, or plaintext description.
+The bootstrap is immutable for one vault identity.
+A backend may create it only when absent and must reject existing bytes that differ from the expected bootstrap.
 
 The local device stores the following outside the encrypted repository:
 
@@ -260,7 +272,7 @@ The local device stores the following outside the encrypted repository:
 - Device-local wrapped-root-key slot records.
 - Last trusted local and remote snapshot identities.
 - Incomplete local transaction records.
-- Registered plaintext workspaces requiring cleanup.
+- Authenticated cleanup records containing random workspace identities and lifecycle state, but never arbitrary cleanup paths.
 
 The encrypted object graph contains:
 
@@ -281,9 +293,25 @@ Notecrypt never performs cross-file or cross-vault deduplication.
 ## Key Hierarchy
 
 Vault creation generates a random 256-bit Vault Root Key.
-The recovery passphrase derives a Recovery Key Encryption Key through Argon2id using versioned parameters and a random salt.
+The default recovery credential is version-1 BIP39 English encoding of 128 CSPRNG bits as 12 words plus checksum.
+Initialization displays that generated phrase once, requires exact confirmation before publishing the initial head, and never stores the phrase.
+The recovery phrase derives a Recovery Key Encryption Key through Argon2id using versioned parameters and a random 128-bit salt.
 The Recovery Key Encryption Key wraps the Vault Root Key.
-The passphrase is never stored.
+The public bootstrap and recovery wrapper form an offline verifier for guessed recovery credentials.
+Argon2 only slows offline guessing and does not turn a user-selected weak passphrase into a strong credential.
+
+Custom recovery passphrases use policy version 1.
+The accepted policy is 20 through 1,024 UTF-8 bytes, at least five whitespace-delimited words, no NUL, and byte-preserving input with no silent Unicode normalization.
+Selecting a custom passphrase requires the explicit custom-recovery option, an offline-guessing warning, and a second matching entry before publication.
+Interactive input that does not meet the policy is rejected rather than silently weakened.
+Non-interactive initialization uses a protected file descriptor, requires the explicit offline-risk acceptance option, requires a second confirmation file descriptor, and fails closed when either descriptor is absent, reused, mismatched, outside the size limits, or attached to a terminal.
+
+Argon2id profile 1 has a 16-byte salt, 32-byte output, a floor of 65,536 KiB, three iterations, and one lane, and a ceiling of 1,048,576 KiB, ten iterations, and sixteen lanes.
+Every serialized KDF value is checked before conversion to library or platform integer types.
+Values above a ceiling, below a floor, equal to `u32::MAX`, or overflowing a byte-count or allocation conversion are rejected before allocation or computation.
+Calibration stays within these bounds and targets 750 to 1,500 ms without reducing the floor.
+Cancellation is checked before Argon2 begins and again after it returns but before any derived key, wrapper, bootstrap, or head is published.
+Phase 1 does not claim that the selected Argon2 implementation is interruptible during one library call.
 
 The Vault Root Key derives separate keys for:
 
@@ -298,19 +326,54 @@ Passphrase unlock derives this key before trusting existing local state.
 Device unlock first authenticates the wrapped root key with the OS-protected device key, derives the local-verification key, and then verifies the complete slot and trusted-state records.
 Authentication failure disables device unlock and requires passphrase recovery plus explicit local-state repair.
 
-Each newly encrypted content chunk receives a fresh random data key, random object identity, and random nonce.
-The chunk data key is wrapped by a vault-derived wrapping key.
+## Durable Cryptographic Profile
+
+Cryptographic profile 1 is immutable once golden fixtures ship.
+All multi-field AAD and MAC inputs use canonical length-delimited `minicbor` arrays in the listed order.
+All XChaCha20-Poly1305 tags are 16 bytes, all keyed BLAKE3 authenticators and fingerprints are 32 bytes, and all comparisons are constant time.
+Wire algorithm identifiers are `0x0001` for XChaCha20-Poly1305, `0x0002` for keyed BLAKE3-256 authentication, `0x0003` for keyed BLAKE3-256 fingerprints, `0x0001` in the KDF namespace for Argon2id profile 1, and `0x0001` in the derivation namespace for HKDF-SHA-256 profile 1.
+
+| Durable kind | Construction and key domain | Nonce | Canonical AAD or MAC coverage | Authenticator and size limit |
+| --- | --- | --- | --- | --- |
+| Recovery slot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the Argon2id recovery wrapping key | Fresh 24 CSPRNG bytes | Crypto profile, vault format version, vault ID, slot version, slot ID, KDF ID, salt, memory, iterations, and lanes | AEAD tag; exactly 32 plaintext key bytes and at most 4 KiB encoded slot bytes |
+| Device slot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the native device wrapping key | Fresh 24 CSPRNG bytes | Crypto profile, local-state version, vault ID, slot version, slot ID, provider ID, and complete provider reference | AEAD tag; exactly 32 plaintext key bytes and at most 8 KiB encoded record bytes |
+| Metadata envelope, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, object kind, format version, object ID, and plaintext length | AEAD tag; at most 1 MiB plaintext |
+| Logical tree, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, tree kind, format version, tree object ID, entry count, and plaintext length | AEAD tag; at most 256 MiB plaintext and 1,000,000 entries |
+| Revision manifest, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/metadata/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, manifest kind, format version, file ID, revision ID, object ID, chunk size, chunk count, total plaintext length, and manifest plaintext length | AEAD tag; at most 64 MiB plaintext and 1,048,576 chunks |
+| Snapshot, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with the metadata key plus keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/snapshot-authentication/v1` | Fresh 24 CSPRNG bytes for AEAD | Crypto profile, vault ID, snapshot kind, format version, snapshot ID, ordered parent IDs, tree object ID, device ID, and plaintext length; the outer MAC covers the complete canonical encrypted envelope | AEAD tag plus 32-byte MAC; at most 1 MiB plaintext and two parents |
+| Authenticated head, profile `0x0001` | Keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/snapshot-authentication/v1` | None | Crypto profile, head version, vault ID, snapshot ID, snapshot object ID, tree object ID, and complete canonical head payload | 32-byte MAC; at most 64 KiB encoded head bytes |
+| Chunk-key wrapper, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with HKDF domain `notecrypt/content-wrapping/v1` | Fresh 24 CSPRNG bytes | Crypto profile, vault ID, chunk kind, format version, file ID, object ID, checked sequence, plaintext length, and content algorithm ID | AEAD tag; exactly 32 plaintext data-key bytes and at most 128 encoded wrapper bytes |
+| Content chunk, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with one fresh per-chunk data key | One fresh 16-byte CSPRNG domain per newly encrypted file revision followed by an 8-byte big-endian checked chunk sequence | Crypto profile, vault ID, chunk kind, format version, file ID, object ID, checked sequence, plaintext length, and chunk-key wrapper bytes | AEAD tag; at most 4 MiB plaintext plus 4 KiB framing |
+| Same-position chunk fingerprint, profile `0x0001` | Keyed BLAKE3 `0x0003` with HKDF domain `notecrypt/chunk-fingerprint/v1` | None | File ID, checked chunk position, plaintext length, and plaintext bytes | 32-byte fingerprint; input is one bounded content chunk |
+| Local-state record, profile `0x0001` | Keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/local-verification/v1` and a distinct label for trusted head, trusted remote, backend copy, cleanup, or device slot | None | Crypto profile, local-state version, vault ID, record type, record ID, payload length, and complete canonical payload | 32-byte MAC; at most 64 KiB encoded record bytes |
+
+The store rejects cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, and modified-AAD substitutions before returning plaintext or trusted metadata.
+Each newly encrypted content chunk receives a fresh random data key and random object identity.
+The chunk data key is wrapped by the vault-derived content-wrapping key.
 The encrypted file-revision manifest contains the ordered chunk identities, keyed plaintext fingerprints, individual plaintext lengths, and total plaintext length.
 The keyed fingerprints are visible only after unlock and allow reuse of an unchanged chunk at the same position in the same logical file.
-Chunk encryption authenticates the vault ID, object type, format version, file identity, random object identity, and plaintext length.
+The store computes a candidate fingerprint and compares it with the previous descriptor at the same file position before selecting descriptor reuse or fresh encryption.
 The revision manifest authenticates the revision identity, chunk order, chunk count, total plaintext length, and every referenced chunk identity.
 This split permits explicit same-file chunk reuse while making substitution, reordering, deletion, duplication, and truncation fail authentication.
+
+The store owns stream orchestration.
+It checks the unlocked-session generation, acquires a key guard for one bounded chunk, performs fingerprinting and encryption or decryption, drops the guard, and checks the same generation again before accepting the chunk result.
+No raw root, fingerprint, wrapping, metadata, or data-key reference survives between chunks.
+Lock during a chunk prevents that chunk and all later work from entering a published revision.
 
 A device-unlock slot wraps the same Vault Root Key using a random key protected by the native credential store.
 The resulting wrapped Vault Root Key and credential-store reference are stored together in a device-local slot record outside the replicated repository.
 Enrollment and removal use the trusted local-state transaction mechanism.
 An app-specific PIN is permitted only when the operating system supplies device binding and a protected retry counter.
 Otherwise phase 1 uses the passphrase or operating-system-native unlock prompt.
+
+Rewrapping the same Vault Root Key is credential maintenance and not revocation because prior recovery or device wrappers remain in public Git history.
+Phase 1 never replaces the immutable bootstrap for credential maintenance.
+Device-local wrapper replacement, or any future auxiliary same-root recovery wrapper format, can change which wrapper a current client prefers but cannot make prior wrappers or ciphertext secret again.
+Recovery from a suspected credential or key compromise uses `CompromiseRekey`.
+`CompromiseRekey` creates a new vault ID, Vault Root Key, generated recovery phrase or explicitly confirmed custom passphrase, file identities, revision identities, object identities, bootstrap, and parentless current-state snapshot in an empty target backend.
+It streams the currently authenticated plaintext through bounded decrypt and fresh encryption pipelines and copies no old object, wrapper, snapshot parent, Git commit, or backend history.
+Already exposed ciphertext, wrappers, keys, and plaintext cannot be made confidential again.
 
 ## Local Transaction Model
 
@@ -340,10 +403,11 @@ Strict mode rejects editor commands that detach and cannot be supervised.
 
 The workspace watcher debounces independently per logical path and waits until a write is stable across a bounded quiet interval.
 It treats in-place writes, truncate-and-rewrite saves, and temporary-file rename saves as equivalent candidates.
-After the quiet interval it opens a stable source handle, records file identity, size, modification metadata, and path generation, and then streams from that handle.
-Before publication it verifies that the observed generation is still current.
+After the quiet interval the workspace adapter opens an opaque stable-source handle and returns an identity token containing adapter-owned file identity and generation evidence.
+The service streams only from that handle and never reopens the path as the encryption source.
+After staged objects authenticate and immediately before the store publishes the revision, the store invokes a service-supplied publication guard that asks the adapter to validate the same identity token against the armed workspace generation.
 If the source changed, it discards the temporary ciphertext and retries without publishing stale output.
-It streams the saved bytes into authenticated chunks on a worker.
+It streams the saved bytes into authenticated chunks on a worker using one short-lived key guard per bounded chunk.
 Unchanged chunks are reused when their keyed plaintext fingerprint matches the previous revision.
 Changed chunks receive new encryption and immutable object identities.
 The resulting revision is committed through the local transaction model.
@@ -382,10 +446,17 @@ It states that editor buffers not saved to disk cannot be recovered by Notecrypt
 At the deadline it stops accepting new mutations, waits for the current stable write within a short bounded grace period, commits the latest saved revision, requests graceful editor termination, and then terminates the supervised editor if required.
 
 Notecrypt next removes registered plaintext workspaces and erases session key material.
-If removal fails, cryptographic access still locks, but the application reports a critical plaintext-residue warning and records the path for cleanup on next start.
+If removal fails, cryptographic access still locks, but the application reports a critical plaintext-residue warning and preserves the authenticated workspace identity for cleanup on next start.
 It never reports a clean lock while cleanup remains unconfirmed.
 
-The next startup processes the cleanup registry before allowing a vault unlock.
+All plaintext workspaces live directly below one fixed canonical Notecrypt-owned versioned workspace base.
+Each child name is the lowercase hexadecimal encoding of a CSPRNG-generated 128-bit `WorkspaceId` and no cleanup record stores or accepts an arbitrary path.
+Workspace creation follows reserve, register, create, activate, materialize ordering.
+The unlocked store capability reserves the identity and writes an authenticated registered cleanup record before the adapter creates the directory, then activates the record only after the adapter verifies restrictive permissions and base containment.
+Cleanup follows remove, verify absent, and unregister ordering, and only the store capability may authenticate or change the record state.
+At process startup, before any unlock, Notecrypt enumerates direct children of only the fixed application-owned base, refuses to follow symlinks, junctions, or reparse points, removes safe children by identity, and exposes no unlocked session until this cleanup finishes successfully.
+Cleanup failure remains a blocking warning with retry or exit actions only.
+After unlock, the store authenticates cleanup records and reconciles them with that fixed-base sweep.
 
 ## Snapshot and Conflict Model
 
@@ -411,6 +482,8 @@ No phase 1 operation silently discards or automatically merges file bytes.
 
 A backend declares support for:
 
+- Reading a typed bootstrap through a 1 MiB hard limit.
+- Creating the exact bootstrap only when absent and returning created or already-matching without replacing different existing bytes.
 - Reading the current opaque remote head.
 - Listing object inventory in bounded pages.
 - Fetching immutable objects by opaque ID.
@@ -418,8 +491,13 @@ A backend declares support for:
 - Reading back published state.
 - Reporting object-size, batch-size, and concurrency limits.
 
-Publication is the backend transaction boundary.
-On success every object referenced by the replacement head is remotely readable and the new head is observable.
+The bootstrap binds its canonical bytes and recovery-slot AAD to the vault ID and cryptographic profile.
+Replication rejects missing bootstrap after a vault has been established, oversized bytes, another vault's replayed bootstrap, conflicting existing bytes, malformed bytes, and a stale bootstrap profile before attempting head authentication.
+Bootstrap transfer plus independent readback is mandatory for backend conformance, same-vault backend copy, Git onboarding, backup, and clean-device recovery.
+
+Backend publication atomically makes its staged bytes and opaque replacement head observable as one backend outcome.
+The backend does not decide whether the replacement head's reachable graph is complete or authentic.
+Replication proves bootstrap identity plus complete reachable-object availability and authenticity through the store before it records success.
 On a stale expected head, the head remains unchanged, although unreachable immutable objects may remain for later repair or collection.
 Git satisfies this contract by building one local commit containing the batch and pushing its dedicated branch with fast-forward protection.
 Object-store backends may upload immutable objects first and then conditionally replace their head object.
@@ -429,26 +507,71 @@ Backends without conditional head replacement cannot support unrestricted multi-
 They must advertise the limitation and run only in an explicitly selected single-writer mode.
 
 One backend is active and writable for a device at a time.
-Migration uses a separately configured target, copies and verifies all reachable encrypted objects, conditionally publishes the target head, records completion, and only then permits switching the active backend.
+`BackendCopy` means migration of the same vault ID, Vault Root Key, bootstrap, authenticated graph, and history between backends.
+`BackendCopy` uses a separately configured target, copies and verifies the bootstrap and all reachable encrypted objects, conditionally publishes the same authenticated head, records completion, and only then permits switching the active backend.
+`CompromiseRekey` means creation of a new vault and history-free parentless current-state snapshot with all-new keys and encrypted identities.
+Same-vault `BackendCopy` is never offered as recovery from suspected credential or key compromise.
 Optional backup targets are read-only destinations from Notecrypt's perspective.
+
+## Revocable Replication Capability
+
+Raw store helpers remain crate-private and replication receives an object-safe `ReplicationLease` from the unlocked vault capability.
+The lease supports bounded local object-existence checks, authenticated quarantine import that returns typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, bounded reachable-graph traversal, streaming encrypted export, fast-forward or reconciled snapshot commit, and atomic trusted-remote observation recording.
+Every method checks the session generation before and after one bounded object or graph step and returns locked when revocation changes the generation.
+Imported bytes remain in quarantine until their kind, profile, canonical encoding, authentication, references, and declared lengths validate.
+Cancellation, timeout, authentication failure, or any limit failure removes the operation's quarantine data before returning.
+
+Replication budget profile 1 applies the stricter of these limits, backend-advertised limits, and local available-space limits.
+
+| Budget | Phase 1 limit |
+| --- | --- |
+| Bootstrap | 1 MiB |
+| Authenticated head | 64 KiB |
+| Content chunk object | 4 MiB plaintext plus 4 KiB framing |
+| Revision manifest object | 64 MiB |
+| Logical tree object | 256 MiB |
+| Snapshot object | 1 MiB |
+| Aggregate transferred or traversed bytes per operation | 1 TiB |
+| Reachable objects per operation | 10,000,000 |
+| Graph depth | 100,000 edges |
+| Wall-clock duration | 30 minutes |
+| Quarantine disk | The smaller of 1 TiB and 80 percent of free space measured before staging |
+
+A minimum 1 GiB free-space reserve remains outside the quarantine budget.
+Progress requires at least one complete bounded page or object within each 30-second interval, so an infinite or trickle response cannot extend the wall-clock budget indefinitely.
+Tests cover infinite inventory, trickle input, every oversized object kind, excessive objects, excessive depth, timeout, disk-budget exhaustion, cancellation, and quarantine removal.
 
 ## Git Backend
 
 The Git backend stores only the encrypted vault layout and Notecrypt metadata needed to recognize the dedicated vault branch.
-The adapter invokes Git directly with explicit arguments and never interpolates input into a shell command.
-Vault paths, ref names, and remote names are validated before invocation.
+One hardened `GitRunner` policy is mandatory for onboarding, fetch, sync, backup, `BackendCopy`, and clean-device recovery.
+The runner invokes Git directly with argument arrays and never starts a shell.
+Every invocation sets `core.hooksPath` to an empty trusted Notecrypt-owned directory, disables pagers and replace objects, bypasses system and global configuration, and uses only a locally parsed repository configuration that passed the Notecrypt allowlist.
+Internal publication uses `push --no-verify` so user or repository hooks cannot execute inside the trusted process.
+The runner removes every inherited `GIT_*` variable.
+It then sets only Notecrypt-controlled `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_TERMINAL_PROMPT`, `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_GLOBAL`, and `GIT_PAGER` values needed for neutral commits, explicit prompt policy, isolated configuration, and non-paged output.
+It rejects local `include` and `includeIf` directives, aliases, filters, submodule configuration, pager configuration, replace references, custom credential commands outside the selected Git credential mechanism, custom SSH commands, and unrecognized remote-helper schemes.
+Protocol policy defaults to deny, explicitly permits configured HTTPS and SSH remotes, and exposes local `file` transport only through a separate local or test capability that cannot be selected by remote configuration.
+The runner rejects `ext`, unknown URL schemes, symlinked Git control files, and repository modes other than regular files, directories, and the exact allowed encrypted paths.
+Before every operation it validates the repository marker, canonical absolute Git directory, worktree relationship, dedicated branch, configured remote, selected transport, and allowed local configuration.
 Git credentials remain under the user's Git credential configuration and are not copied into vault configuration.
 
 Synchronization performs fetch, authenticates reachable Notecrypt objects, reconciles snapshots if required, creates a Git tree and commit from a validated encrypted-file inventory using plumbing commands, and performs a normal fast-forward push from a private temporary ref.
 Notecrypt-generated commits use a fixed neutral author and committer identity and contain no logical vault name or file name in the commit message.
 Commit timestamps and remote account identity remain observable.
 A rejected push triggers a bounded refetch and reconciliation retry rather than an overwrite.
-The adapter advances its visible local tracking ref only after reading and verifying the resulting remote reference.
+`ls-remote` is ref discovery only and never proves publication or object availability.
+After discovering the exact remote candidate, the adapter fetches that candidate into an isolated quarantine repository with no shared object alternates and verifies every newly introduced commit, tree, path, mode, and blob from the last trusted commit through the candidate, or the full ancestry when no trusted commit exists.
+The verifier accepts only the repository marker, immutable bootstrap, authenticated head, and allowed encrypted object paths with regular-file or directory modes.
+It rejects unexpected paths, executable modes, symlinks, submodules, missing blobs, corrupt objects, malformed data, unauthenticated vault blobs, transient plaintext commits, and an ancestry whose clean tip hides an unsafe intermediate commit.
+Replication then authenticates the bootstrap, head, and complete reachable Notecrypt graph through the revocable store lease before recording the remote observation atomically.
+The adapter advances its visible local tracking ref only after that independent fetch and verification succeeds.
 If the remote may have accepted a push but the response or verification read fails, the adapter reports an indeterminate outcome and the replication workflow rereads the remote head before taking another action.
 
 Onboarding installs managed defense-in-depth hooks that reject known plaintext workspaces and unexpected files.
 Hooks are not the confidentiality boundary because users and tools can bypass them.
 `notecrypt vault backup` independently validates the encrypted layout before committing or pushing.
+Tests inject hostile hooks, configuration includes, SSH commands, remote helpers, pagers, `GIT_*` variables, replace objects, filters, missing blobs, corrupt objects, false committed outcomes, and false readback.
 
 ## Application Service Contract
 
@@ -487,6 +610,8 @@ The default layout contains:
 - A details and activity pane.
 - A persistent command hint bar.
 - Modal dialogs for unlock, create, import, rename, move, delete, conflicts, settings, and destructive confirmations.
+- Initialization dialogs that show the generated recovery phrase once, require phrase confirmation, and place custom passphrases behind the explicit offline-guessing warning and confirmation path.
+- Dialogs for whole-vault open, synchronization, backup, onboarding, rollback and indeterminate-publication warnings, conflict inspection and resolution, compromise rekey, and device-slot enrollment and removal.
 
 Primary actions include:
 
@@ -499,12 +624,16 @@ Primary actions include:
 - Synchronize.
 - Run backup.
 - Inspect and resolve conflicts.
+- Onboard or copy a backend and verify its bootstrap.
+- Perform a history-free compromise rekey into an empty backend.
+- Enroll, list, and remove device-local unlock slots.
 
 The TUI redraw loop never performs cryptography, disk traversal, Git invocation, passphrase derivation, or blocking channel reads.
 It renders the latest immutable view model and sends commands to the service.
 Progress updates are coalesced to avoid flooding the terminal.
 
-The CLI provides equivalent one-shot non-interactive commands and a versioned `--output json` mode for automation.
+The CLI provides equivalent one-shot commands and a versioned `--output json` mode for automation.
+Its parser and configuration cover initialization recovery policy, bounded whole-vault open, sync, backup, conflict inspection and resolution, onboarding, `BackendCopy`, `CompromiseRekey`, trusted warning acknowledgements, and device-slot enrollment, listing, and removal.
 Each protected CLI invocation prompts, unlocks for that operation, and locks before process exit.
 Phase 1 does not expose standalone CLI `unlock` or `lock` commands because unlock sessions are process-local and cross-process control requires a separately designed authenticated IPC owner.
 The human TUI is not implemented by parsing CLI text output.
@@ -635,6 +764,9 @@ Configuration precedence is:
 `vault_root` is accepted as `--vault-root` or `NOTECRYPT_VAULT_ROOT`.
 Secrets and passphrases are not accepted through command-line arguments because process listings and shell history can expose them.
 Passphrases are read from a protected terminal prompt or a documented file-descriptor input intended for automation.
+Generated recovery is the default for interactive and non-interactive initialization.
+Non-interactive generated recovery writes the phrase only to an explicitly supplied owner-only output file descriptor and requires exact confirmation through a separate protected input descriptor before any state publication.
+Custom non-interactive recovery additionally requires explicit offline-risk acceptance and two protected matching inputs that satisfy custom-passphrase policy version 1.
 
 Portable local configuration uses platform-native application directories.
 Backend credentials remain in Git credential management or the native credential store.
@@ -654,9 +786,10 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 ### Compatibility tests
 
 - Golden durable-format fixtures.
+- Golden cryptographic-profile and KDF-policy fixtures with cross-kind, cross-vault, wrong-object, wrong-version, wrong-length, wrong-slot, and modified-AAD rejection.
 - Old-reader and new-reader behavior for supported versions.
 - CLI JSON schema fixtures.
-- Backend conformance suite.
+- Backend conformance including bootstrap creation, immutable matching, transfer, and independent readback.
 
 ### Crash and fault tests
 
@@ -665,6 +798,7 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 - Interrupted encryption and interrupted cleanup.
 - Git fetch or push termination.
 - Remote head races.
+- Lock during chunk encryption, source replacement before publication, and replication quarantine cleanup at every budget boundary.
 
 ### End-to-end tests
 
@@ -675,6 +809,7 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 - Public repository scan proving that logical names and known plaintext markers are absent.
 - Recovery on a clean device using only repository and passphrase.
 - TUI flows in a pseudo-terminal on Linux, macOS, and Windows-compatible terminal infrastructure.
+- Built-process CLI and pseudo-terminal TUI flows for initialization phrase confirmation, custom recovery warnings, whole-vault open, sync, backup, conflict inspection and resolution, onboarding, rollback, indeterminate publication, device denial, device removal failure, passphrase fallback, and clean-device recovery.
 
 ### Security tests
 
@@ -682,6 +817,8 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 - Assert secrets cannot be formatted through compile-time tests.
 - Scan logs, crash reports, command arguments, Git commits, and repository paths for plaintext canaries.
 - Verify KDF parameter floors and bounded decoder allocations.
+- Verify KDF ceilings, checked conversions, maximum, maximum plus one, `u32::MAX`, cancellation before Argon2, and cancellation after Argon2 before key publication.
+- Verify hostile Git hooks, includes, SSH commands, remote helpers, pagers, environment variables, replace objects, unsafe history, missing blobs, corrupt objects, and false publication outcomes.
 - Run dependency auditing and license policy checks in CI.
 - Obtain an independent cryptographic and storage-format review before describing the vault as suitable for sensitive PII in a public repository.
 
@@ -698,19 +835,21 @@ Replicated encrypted vault preferences are distinct from device-local configurat
 Notecrypt versions these contracts independently:
 
 1. Vault bootstrap and encrypted object format.
-2. Snapshot and logical layout format.
-3. Sync backend SPI.
-4. External application API when the first non-Rust UI is introduced.
-5. CLI machine-readable output.
+2. Cryptographic profile, Argon2id profile, and custom-passphrase policy.
+3. Snapshot and logical layout format.
+4. Sync backend SPI and replication budget profile.
+5. External application API when the first non-Rust UI is introduced.
+6. CLI machine-readable output.
 
 Durable readers reject unsupported future major versions without modifying the vault.
-Migrations create a new verified snapshot and retain the previous reachable state until explicit garbage collection.
+Format migrations create a new verified snapshot and retain the previous reachable state until explicit garbage collection.
+`BackendCopy` preserves the same authenticated graph and history, while `CompromiseRekey` creates a new vault with no predecessor graph or history.
 
 ## Delivery Slices
 
 ### Slice 1: Runnable local vertical slice
 
-The user can initialize a vault, unlock with a passphrase, create and edit one file through a supervised editor, lock, reopen, and browse through the TUI.
+The user can initialize a vault with a generated recovery phrase, confirm it, unlock, create and edit one file through a supervised editor, lock, reopen, and browse through the TUI.
 The encrypted repository contains no plaintext name or content.
 
 ### Slice 2: Durable arbitrary-file vault
@@ -719,7 +858,7 @@ The user can manage a full logical tree, import arbitrary regular files, use who
 
 ### Slice 3: Portable Git synchronization
 
-The user can synchronize two devices, preserve conflicts, migrate backend configuration, run backup, and verify the remote reference.
+The user can synchronize two devices, preserve and resolve conflicts, perform a same-vault `BackendCopy`, run backup, and verify the bootstrap, remote reference, history, and complete reachable graph.
 
 ### Slice 4: Hardened phase 1 release
 
@@ -731,14 +870,19 @@ Public security language is limited to properties demonstrated by those tests an
 Phase 1 is complete only when:
 
 - The CLI and TUI exercise the same service facade.
+- CLI and TUI initialization generate, show once, and confirm a 128-bit recovery phrase by default, and expose the versioned custom-passphrase warning path explicitly.
 - Targeted editing never scans or decrypts the entire vault.
 - A user can perform the complete local workflow without manually manipulating encrypted objects.
 - A user can recover the vault on a clean second device using only the Git repository and passphrase.
+- Clean-device recovery independently reads and validates the immutable bootstrap before authenticating the complete graph.
 - Concurrent Git-backed edits preserve both versions deterministically.
+- A Git candidate is accepted only after every newly introduced history entry and the complete reachable Notecrypt graph verify in isolation.
 - The encrypted repository and Git history contain no plaintext canary, logical filename, extension, or directory name.
 - Crash injection cannot produce a trusted head that references missing or unauthenticated objects.
 - The TUI remains interactive during large-file encryption and Git synchronization.
 - Measured latency and memory budgets pass on the supported platform matrix.
 - Cleanup failures are visible and recoverable.
+- Workspace cleanup accepts only random identities below the fixed application-owned base and completes before unlock exposure.
+- `CompromiseRekey` produces a parentless current-state snapshot in a new empty vault and never copies prior ciphertext or history.
 - Documentation explains the security guarantees, limitations, recovery procedure, and backup verification.
 - Independent review has not identified an unresolved critical cryptographic or format flaw.
