@@ -495,7 +495,7 @@ impl VaultStore {
             )?;
             Arc::new(registry.unlock(candidate, wrapping_key)?.into_key_cell())
         };
-        crate::local::unlock_with_keys(self, keys, None)
+        crate::local::unlock_with_keys(self, keys, None, None)
     }
 
     pub(crate) fn open_object(
@@ -797,6 +797,7 @@ mod tests {
             root,
             "test-device",
             &mut FixedRandom(0x23),
+            &AtomicBool::new(false),
         )
         .unwrap();
         let generation = keys.generation();

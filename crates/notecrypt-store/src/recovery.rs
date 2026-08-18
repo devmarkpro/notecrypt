@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use notecrypt_core::SnapshotId;
 use notecrypt_format::{DecodeLimits, decode_local_state};
@@ -29,7 +30,16 @@ pub(crate) fn recover(
         &mut notecrypt_platform_fs::FileCapability,
     ) -> Result<(), StoreError>,
     mut verify_reachable: impl FnMut(&[u8]) -> Result<(), StoreError>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RecoveryOutcome, StoreError> {
+    let check_cancel = || {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Acquire)) {
+            Err(StoreError::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    check_cancel()?;
     let generation = keys.generation();
     keys.validate_generation(generation)?;
     let journal_name = component("active")?;
@@ -90,7 +100,10 @@ pub(crate) fn recover(
         }
     }
 
-    let mut published = batch.authenticate_and_publish(&mut authenticate_object)?;
+    check_cancel()?;
+    let mut published =
+        batch.authenticate_and_publish_checked(&mut authenticate_object, &check_cancel)?;
+    check_cancel()?;
     let head_is_new = current_head
         .as_ref()
         .is_some_and(|current| current.commitment == intended.commitment);
@@ -102,6 +115,7 @@ pub(crate) fn recover(
             u64::try_from(journal.intended_head().len()).map_err(|_| StoreError::LimitExceeded)?,
         )?;
         let authorization = keys.authorize_publication(generation)?;
+        check_cancel()?;
         published.publish_replacement(&stage, &component("head")?)?;
         drop(authorization);
     }

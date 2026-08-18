@@ -1,9 +1,10 @@
+use std::sync::{Arc, Mutex};
+
 use notecrypt_service::RecoverySecretPresentation;
 
-fn forge(payload: String) -> RecoverySecretPresentation {
+fn forge(payload: Vec<u8>) -> RecoverySecretPresentation {
     RecoverySecretPresentation {
-        generation: 1,
-        payload,
+        payload: Arc::new(Mutex::new(Some(zeroize::Zeroizing::new(payload)))),
     }
 }
 

@@ -46,9 +46,9 @@ pub use key_cell::test_support as revocation_test_support;
 #[cfg(feature = "test-support")]
 pub use local::test_support as local_test_support;
 pub use local::{
-    RepositoryEntry, RepositoryEntryId, RepositoryEntryKind, RepositoryListedEntry,
-    RepositoryMutation, RepositoryMutationResult, RepositorySnapshot, StreamRevisionRequest,
-    UnlockedVaultLease, VaultRepair, VaultRepairAction,
+    RepositoryAuthenticatedStatus, RepositoryAuthenticatedView, RepositoryEntry, RepositoryEntryId,
+    RepositoryEntryKind, RepositoryListedEntry, RepositoryMutation, RepositoryMutationResult,
+    RepositorySnapshot, StreamRevisionRequest, UnlockedVaultLease, VaultRepair, VaultRepairAction,
 };
 pub use reachability::{
     BackendObservationFingerprint, CommittedReachableHead, PendingRemotePublication,

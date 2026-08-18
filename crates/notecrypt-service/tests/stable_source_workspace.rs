@@ -7,13 +7,12 @@ use std::time::Duration;
 use notecrypt_core::SnapshotId;
 use notecrypt_crypto::{Argon2idParameters, RecoveryPassphrase, ValidatedArgon2idParameters};
 use notecrypt_service::{
-    Command, CompromiseTargetResolver, HostPortError, LocalStreamRevisionRequest,
+    Command, CompromiseTargetResolver, HostPortError, LocalStreamRevisionRequest, LocalVaultConfig,
     LogicalWorkspacePath, MonotonicClock, OperationContext, OperationExecutor, OperationResult,
-    RecoverySecretInput, RepositoryPortError, ServiceConfig, ServiceError, ServiceHandle,
-    SessionComponents, SessionPolicy, StableSourceToken, StartupCleanupReport,
-    StoreVaultRepository, TargetWorkspaceRequest, ValidatedVaultTargetConfig,
-    VaultWorkspaceRequest, WorkspaceAbsenceGuard, WorkspaceLease, WorkspaceMode,
-    WorkspaceOwnershipGuard, WorkspaceProvider, WorkspaceSession,
+    RecoveryKdfProfileV1, RecoverySecretInput, RepositoryPortError, ServiceConfig, ServiceError,
+    ServiceHandle, SessionComponents, SessionPolicy, StableSourceToken, StartupCleanupReport,
+    StoreVaultRepository, TargetWorkspaceRequest, VaultWorkspaceRequest, WorkspaceAbsenceGuard,
+    WorkspaceLease, WorkspaceMode, WorkspaceOwnershipGuard, WorkspaceProvider, WorkspaceSession,
 };
 use notecrypt_store::VaultStore;
 use tempfile::TempDir;
@@ -40,10 +39,7 @@ impl WorkspaceAbsenceGuard for AbsenceGuard {}
 struct TargetResolver;
 
 impl CompromiseTargetResolver for TargetResolver {
-    fn resolve(
-        &self,
-        _target: [u8; 16],
-    ) -> Result<ValidatedVaultTargetConfig, RepositoryPortError> {
+    fn resolve(&self, _target: [u8; 16]) -> Result<LocalVaultConfig, RepositoryPortError> {
         Err(RepositoryPortError::NotFound)
     }
 }
@@ -390,8 +386,16 @@ fn service(
         &AtomicBool::new(false),
     )
     .unwrap();
+    drop(store);
+    let target = LocalVaultConfig::try_new(
+        repository_root.canonicalize().unwrap(),
+        local_root.canonicalize().unwrap(),
+        RecoveryKdfProfileV1::try_new(65_536, 3, 1).unwrap(),
+        "test-device".to_owned(),
+    )
+    .unwrap();
     let repository =
-        StoreVaultRepository::existing(store, workspace.clone(), Arc::new(TargetResolver));
+        StoreVaultRepository::open(target, workspace.clone(), Arc::new(TargetResolver)).unwrap();
     let components = SessionComponents::new(
         Arc::new(repository),
         workspace,
@@ -435,7 +439,7 @@ fn stable_source_commit_uses_one_exact_handle_and_rejects_portable_collision_bef
         Arc::clone(&probe),
         executor,
     );
-    let result = service.submit(Command::List(notecrypt_service::ListEntries));
+    let result = service.submit(Command::Backup(notecrypt_service::BackupVault));
     assert!(result.is_ok());
     result.unwrap().wait_result(Duration::from_secs(5)).unwrap();
     assert_eq!(probe.open_calls.load(Ordering::Acquire), 1);
@@ -473,7 +477,7 @@ fn stable_source_validation_failure_publishes_no_revision_and_validates_once() {
         executor,
     );
     let operation = service
-        .submit(Command::List(notecrypt_service::ListEntries))
+        .submit(Command::Backup(notecrypt_service::BackupVault))
         .unwrap();
     operation.wait_result(Duration::from_secs(5)).unwrap();
     assert_eq!(probe.open_calls.load(Ordering::Acquire), 1);
@@ -508,7 +512,7 @@ fn stable_source_allocation_failure_reaches_the_public_service_error() {
     );
 
     service
-        .submit(Command::List(notecrypt_service::ListEntries))
+        .submit(Command::Backup(notecrypt_service::BackupVault))
         .unwrap()
         .wait_result(Duration::from_secs(5))
         .unwrap();
@@ -538,7 +542,7 @@ fn two_workspace_cleanup_failure_is_retryable_after_root_revocation() {
         executor,
     );
     service
-        .submit(Command::List(notecrypt_service::ListEntries))
+        .submit(Command::Backup(notecrypt_service::BackupVault))
         .unwrap()
         .wait_result(Duration::from_secs(5))
         .unwrap();

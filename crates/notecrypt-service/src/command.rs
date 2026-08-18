@@ -10,6 +10,10 @@ macro_rules! request {
 }
 
 request!(ListEntries, "Requests one bounded logical entry listing.");
+request!(
+    VaultStatusRequest,
+    "Requests authenticated current-vault status."
+);
 request!(CreateFile, "Requests creation of one logical file.");
 request!(
     CreateDirectory,
@@ -36,6 +40,7 @@ request!(BackupVault, "Requests one encrypted backup publication.");
 #[non_exhaustive]
 pub enum Command {
     List(ListEntries),
+    Status(VaultStatusRequest),
     CreateFile(CreateFile),
     CreateDirectory(CreateDirectory),
     ImportFile(ImportFile),
@@ -66,17 +71,70 @@ impl Command {
 
 /// Bounded opaque summary for one logical entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Directory,
+    Tombstone,
+}
+
+/// Immutable authenticated logical entry metadata.
+#[derive(PartialEq, Eq)]
 pub struct EntrySummary {
     opaque_id: [u8; 16],
+    parent_id: [u8; 16],
+    name: zeroize::Zeroizing<String>,
+    kind: EntryKind,
+    revision_id: Option<[u8; 32]>,
 }
 
 impl EntrySummary {
-    pub const fn new(opaque_id: [u8; 16]) -> Self {
-        Self { opaque_id }
+    pub(crate) fn from_authenticated_parts(
+        opaque_id: [u8; 16],
+        parent_id: [u8; 16],
+        name: zeroize::Zeroizing<String>,
+        kind: EntryKind,
+        revision_id: Option<[u8; 32]>,
+    ) -> Self {
+        Self {
+            opaque_id,
+            parent_id,
+            name,
+            kind,
+            revision_id,
+        }
     }
 
     pub const fn opaque_id(&self) -> &[u8; 16] {
         &self.opaque_id
+    }
+
+    pub const fn parent_id(&self) -> &[u8; 16] {
+        &self.parent_id
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub const fn kind(&self) -> EntryKind {
+        self.kind
+    }
+
+    pub const fn revision_id(&self) -> Option<&[u8; 32]> {
+        self.revision_id.as_ref()
+    }
+}
+
+impl std::fmt::Debug for EntrySummary {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EntrySummary")
+            .field("opaque_id", &self.opaque_id)
+            .field("parent_id", &self.parent_id)
+            .field("name", &"<redacted>")
+            .field("kind", &self.kind)
+            .field("revision_id", &self.revision_id)
+            .finish()
     }
 }
 
@@ -84,6 +142,54 @@ impl EntrySummary {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct EntrySummaries {
     entries: Vec<EntrySummary>,
+}
+
+/// Fixed-size authenticated status for the current unlocked vault generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VaultStatus {
+    vault_id: notecrypt_core::VaultId,
+    generation: u64,
+    root_entry_id: [u8; 16],
+    snapshot_id: [u8; 32],
+    entry_count: usize,
+}
+
+impl VaultStatus {
+    pub(crate) const fn new(
+        vault_id: notecrypt_core::VaultId,
+        generation: u64,
+        root_entry_id: [u8; 16],
+        snapshot_id: [u8; 32],
+        entry_count: usize,
+    ) -> Self {
+        Self {
+            vault_id,
+            generation,
+            root_entry_id,
+            snapshot_id,
+            entry_count,
+        }
+    }
+
+    pub const fn vault_id(&self) -> notecrypt_core::VaultId {
+        self.vault_id
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn root_entry_id(&self) -> &[u8; 16] {
+        &self.root_entry_id
+    }
+
+    pub const fn snapshot_id(&self) -> &[u8; 32] {
+        &self.snapshot_id
+    }
+
+    pub const fn entry_count(&self) -> usize {
+        self.entry_count
+    }
 }
 
 impl EntrySummaries {
@@ -169,12 +275,12 @@ fixed_summary!(BackupSummary, "Bounded summary of one backup publication.");
 #[non_exhaustive]
 pub enum OperationResult {
     Entries(EntrySummaries),
+    Status(VaultStatus),
     EntryChanged(EntrySummary),
     Exported(ExportSummary),
     WorkspaceOpened(WorkspaceSummary),
     Synchronized(SyncSummary),
     BackedUp(BackupSummary),
-    SecurityTransitionCompleted,
 }
 
 #[cfg(test)]
@@ -184,11 +290,37 @@ mod capacity_tests {
     #[test]
     fn entry_summaries_discard_source_vector_spare_capacity() {
         let mut source = Vec::with_capacity(1_000_000);
-        source.push(EntrySummary::new([7; 16]));
+        source.push(EntrySummary::from_authenticated_parts(
+            [7; 16],
+            [8; 16],
+            zeroize::Zeroizing::new("entry".to_owned()),
+            EntryKind::File,
+            None,
+        ));
 
         let summaries = EntrySummaries::try_from_iter(source).unwrap();
 
         assert_eq!(summaries.len(), 1);
         assert!(summaries.entries.capacity() <= EntrySummaries::MAX_LEN);
+    }
+
+    #[test]
+    fn entry_summary_bound_consumes_only_one_value_past_the_limit() {
+        let consumed = std::cell::Cell::new(0_usize);
+        let source = std::iter::from_fn(|| {
+            consumed.set(consumed.get() + 1);
+            Some(EntrySummary::from_authenticated_parts(
+                [7; 16],
+                [8; 16],
+                zeroize::Zeroizing::new(String::new()),
+                EntryKind::File,
+                None,
+            ))
+        });
+        assert!(matches!(
+            EntrySummaries::try_from_iter(source),
+            Err(crate::ServiceError::CapacityExceeded)
+        ));
+        assert_eq!(consumed.get(), MAX_RESULT_ENTRIES + 1);
     }
 }

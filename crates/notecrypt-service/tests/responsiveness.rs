@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use notecrypt_service::{
     Command, ConflictSummary, Control, CreateDirectory, CreateFile, DurabilitySummary,
-    EntrySummaries, EntrySummary, ExportFile, ImportFile, ListEntries, MAX_COMPLETED_CAPACITY,
-    MAX_EVENT_CAPACITY, MAX_ID_RETRIES, MAX_QUEUE_CAPACITY, MAX_RESULT_ENTRIES, MAX_WORKERS,
-    OperationContext, OperationEvent, OperationExecutor, OperationId, OperationIdRandom,
-    OperationResult, Progress, ServiceConfig, ServiceError, ServiceHandle, WarningCode,
+    EntrySummaries, ExportFile, ImportFile, ListEntries, MAX_COMPLETED_CAPACITY,
+    MAX_EVENT_CAPACITY, MAX_ID_RETRIES, MAX_QUEUE_CAPACITY, MAX_WORKERS, OperationContext,
+    OperationEvent, OperationExecutor, OperationId, OperationIdRandom, OperationResult, Progress,
+    ServiceConfig, ServiceError, ServiceHandle, WarningCode,
 };
 
 const SHORT_WAIT: Duration = Duration::from_secs(2);
@@ -639,31 +639,6 @@ fn entropy_failures_and_collision_exhaustion_publish_no_operation() {
         Err(ServiceError::IdentifierExhausted)
     ));
     assert_eq!(collision_service.snapshot().active_operations(), 0);
-}
-
-#[test]
-fn result_dtos_remain_bounded_and_explicit() {
-    let summary = EntrySummary::new([9; 16]);
-    assert_eq!(summary.opaque_id(), &[9; 16]);
-
-    let exact = EntrySummaries::try_from_iter(std::iter::repeat_n(summary, MAX_RESULT_ENTRIES))
-        .expect("the exact public result bound is accepted");
-    assert_eq!(exact.len(), MAX_RESULT_ENTRIES);
-    assert!(matches!(
-        EntrySummaries::try_from_iter(std::iter::repeat_n(summary, MAX_RESULT_ENTRIES + 1)),
-        Err(ServiceError::CapacityExceeded)
-    ));
-
-    let consumed = std::cell::Cell::new(0_usize);
-    let unbounded = std::iter::from_fn(|| {
-        consumed.set(consumed.get() + 1);
-        Some(summary)
-    });
-    assert!(matches!(
-        EntrySummaries::try_from_iter(unbounded),
-        Err(ServiceError::CapacityExceeded)
-    ));
-    assert_eq!(consumed.get(), MAX_RESULT_ENTRIES + 1);
 }
 
 #[test]

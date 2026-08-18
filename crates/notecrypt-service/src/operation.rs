@@ -107,6 +107,8 @@ pub(crate) struct OperationState {
     event_changed: Condvar,
     result: Mutex<Option<Result<OperationResult, ServiceError>>>,
     result_changed: Condvar,
+    transition_result: Mutex<Option<Result<(), ServiceError>>>,
+    transition_result_changed: Condvar,
     pub(crate) session_generation: Option<u64>,
     pub(crate) mutating: bool,
     lease_cancellations: Mutex<LeaseCancellations>,
@@ -146,6 +148,8 @@ impl OperationState {
             event_changed: Condvar::new(),
             result: Mutex::new(None),
             result_changed: Condvar::new(),
+            transition_result: Mutex::new(None),
+            transition_result_changed: Condvar::new(),
             session_generation,
             mutating,
             lease_cancellations: Mutex::new(LeaseCancellations::new()),
@@ -204,6 +208,7 @@ impl OperationState {
         self.repository_cancellation.cancel();
         self.event_changed.notify_all();
         self.result_changed.notify_all();
+        self.transition_result_changed.notify_all();
     }
 
     pub(crate) fn cancel_registered_leases(&self) -> bool {
@@ -316,6 +321,51 @@ impl OperationState {
         self.event_changed.notify_all();
         self.result_changed.notify_all();
         true
+    }
+
+    pub(crate) fn finish_transition(&self, outcome: Result<(), ServiceError>) -> bool {
+        let mut lifecycle = self.lifecycle.load(Ordering::Acquire);
+        loop {
+            if lifecycle == TERMINAL {
+                return false;
+            }
+            match self.lifecycle.compare_exchange(
+                lifecycle,
+                TERMINAL,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => lifecycle = observed,
+            }
+        }
+        *lock(&self.transition_result) = Some(outcome);
+        self.event_changed.notify_all();
+        self.result_changed.notify_all();
+        self.transition_result_changed.notify_all();
+        true
+    }
+
+    fn wait_transition_result(&self, timeout: Duration) -> Result<(), ServiceError> {
+        let deadline = Instant::now().checked_add(timeout);
+        let mut result = lock(&self.transition_result);
+        loop {
+            if let Some(result) = result.take() {
+                return result;
+            }
+            let Some(deadline) = deadline else {
+                return Err(ServiceError::TimedOut);
+            };
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(ServiceError::TimedOut);
+            };
+            let (next_result, timed_out) =
+                wait_timeout(&self.transition_result_changed, result, remaining);
+            result = next_result;
+            if timed_out && result.is_none() {
+                return Err(ServiceError::TimedOut);
+            }
+        }
     }
 
     fn next_event(&self) -> Option<OperationEvent> {
@@ -604,6 +654,9 @@ impl OperationHandle {
     }
 
     pub fn cancel(&self) {
+        if self.state.is_terminal() {
+            return;
+        }
         self.state.request_cancel();
         if let Some(service) = self.service.upgrade() {
             service.cancel_exact(&self.state);
@@ -628,6 +681,43 @@ impl Drop for OperationHandle {
         self.state.abandon_consumer();
         if let Some(service) = self.service.upgrade() {
             service.detach(&self.state);
+        }
+    }
+}
+
+/// Dedicated handle for a non-ordinary security transition completion.
+pub struct SecurityTransitionHandle {
+    state: Arc<OperationState>,
+    service: Weak<ServiceInner>,
+}
+
+impl SecurityTransitionHandle {
+    pub(crate) fn new(state: Arc<OperationState>, service: Weak<ServiceInner>) -> Self {
+        Self { state, service }
+    }
+
+    pub fn cancel(&self) {
+        if self.state.is_terminal() {
+            return;
+        }
+        self.state.request_cancel();
+        if let Some(service) = self.service.upgrade() {
+            service.enqueue_security_cancellation(&self.state);
+        }
+    }
+
+    pub fn wait_result(&self, timeout: Duration) -> Result<(), ServiceError> {
+        self.state.wait_transition_result(timeout)
+    }
+}
+
+impl Drop for SecurityTransitionHandle {
+    fn drop(&mut self) {
+        if !self.state.is_terminal() {
+            self.state.request_cancel();
+            if let Some(service) = self.service.upgrade() {
+                service.enqueue_security_cancellation(&self.state);
+            }
         }
     }
 }

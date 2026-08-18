@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -13,9 +13,11 @@ use crate::{
     BeginCompromiseRekey, BeginRecoveryInitialization, Command, CompromiseRekeyConfirmation,
     FreshnessAcknowledgementView, OperationContext, OperationHandle, OperationId, OperationResult,
     PendingCompromiseAction, PendingFreshnessAction, PendingRecoveryAction, RecoverySecretInput,
-    RecoverySecretPresentation, ServiceError, SessionComponents, SessionEvent, SessionState,
-    SessionSummary, VaultSummary, WarningCode,
+    RecoverySecretPresentation, SecurityTransitionHandle, ServiceError, SessionComponents,
+    SessionEvent, SessionState, SessionSummary, VaultSummary, WarningCode,
 };
+
+type SecurityJob = Box<dyn FnOnce() + Send + 'static>;
 
 /// Default number of synchronous workers.
 pub const DEFAULT_WORKERS: usize = 4;
@@ -412,6 +414,8 @@ pub(crate) struct ServiceInner {
     worker_sender: Mutex<Option<Sender<WorkItem>>>,
     cancellation_sender: Mutex<Option<Sender<Arc<OperationState>>>>,
     control_sender: Mutex<Option<Sender<PendingControl>>>,
+    security_sender: Mutex<Option<Sender<SecurityJob>>>,
+    security_busy: AtomicBool,
     identity: Mutex<IdentityState>,
     pub(crate) session: Option<Arc<SessionManager>>,
     transitions: Mutex<TransitionRegistry>,
@@ -422,6 +426,12 @@ const TRANSITION_PENDING: u8 = 0;
 const TRANSITION_CONSUMING: u8 = 1;
 const TRANSITION_CANCELLED: u8 = 2;
 const TRANSITION_COMPLETED: u8 = 3;
+
+fn clear_presentation(record: &TransitionRecord) {
+    if let Some(presentation) = &record.presentation {
+        let _ = lock(presentation).take();
+    }
+}
 
 enum PendingAction {
     Recovery(Box<dyn PendingRecoveryAction>),
@@ -451,10 +461,11 @@ struct TransitionRecord {
     state: AtomicU8,
     action: Mutex<Option<PendingAction>>,
     verifier: Mutex<Option<SecretVerifier>>,
+    presentation: Option<crate::ports::RecoveryPresentationCell>,
     offered: AtomicU8,
     resolution: Mutex<Option<Result<(), ServiceError>>>,
     resolution_changed: Condvar,
-    operation_state: Option<std::sync::Weak<OperationState>>,
+    operation_state: Mutex<Option<std::sync::Weak<OperationState>>>,
 }
 
 struct TransitionRegistry {
@@ -807,6 +818,7 @@ impl ServiceInner {
         if close_service {
             scheduler.closed = true;
             lock(&self.ordinary_sender).take();
+            lock(&self.security_sender).take();
         }
         scheduler.accepting = false;
         scheduler.key_leases_open = false;
@@ -862,6 +874,26 @@ impl ServiceInner {
         }
         self.scheduler_changed.notify_all();
         drop(scheduler);
+        {
+            let registry = lock(&self.transitions);
+            for record in registry.records.values() {
+                if record.kind == TransitionKind::Freshness
+                    || record.state.load(Ordering::Acquire) != TRANSITION_CONSUMING
+                {
+                    continue;
+                }
+                if let Some(state) = lock(&record.operation_state)
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade)
+                {
+                    state.mark_security_cancelled();
+                    if close_service {
+                        state.finish_transition(Err(ServiceError::Closed));
+                    }
+                    self.enqueue_lease_cancellation(&state);
+                }
+            }
+        }
         if let Some(root) = eager_root
             && catch_unwind(AssertUnwindSafe(|| root.begin_close())).is_err()
             && let Some(session) = &self.session
@@ -936,6 +968,10 @@ impl ServiceInner {
             drop(sender);
             self.shutdown();
         }
+    }
+
+    pub(crate) fn enqueue_security_cancellation(&self, state: &Arc<OperationState>) {
+        self.enqueue_lease_cancellation(state);
     }
 
     fn cancel_nonfinal_operations(&self, final_save: Option<&Arc<OperationState>>) {
@@ -1185,6 +1221,7 @@ impl ServiceInner {
         generation: u64,
         action: PendingAction,
         verifier: Option<SecretVerifier>,
+        presentation: Option<crate::ports::RecoveryPresentationCell>,
         cancellation: &Arc<crate::RepositoryCancellation>,
     ) -> Result<Arc<TransitionRecord>, ServiceError> {
         let mut identity = lock(&self.identity);
@@ -1204,10 +1241,11 @@ impl ServiceInner {
             state: AtomicU8::new(TRANSITION_PENDING),
             action: Mutex::new(Some(action)),
             verifier: Mutex::new(verifier),
+            presentation,
             offered: AtomicU8::new(1),
             resolution: Mutex::new(None),
             resolution_changed: Condvar::new(),
-            operation_state: None,
+            operation_state: Mutex::new(None),
         });
         let scheduler = lock(&self.scheduler);
         let mut registry = lock(&self.transitions);
@@ -1270,7 +1308,7 @@ impl ServiceInner {
             Some(record.generation),
             true,
         )?);
-        let mut scheduler = lock(&self.scheduler);
+        let scheduler = lock(&self.scheduler);
         let valid = match record.kind {
             TransitionKind::Recovery => self.session.as_ref().is_some_and(|session| {
                 !scheduler.closed
@@ -1288,7 +1326,7 @@ impl ServiceInner {
             }),
             TransitionKind::Freshness => false,
         };
-        if !valid || scheduler.active.len() == active_capacity(self.config)? {
+        if !valid {
             return Err(ServiceError::StaleCapability);
         }
         let mut registry = lock(&self.transitions);
@@ -1297,7 +1335,6 @@ impl ServiceInner {
             .get(&record.operation)
             .is_some_and(|active| Arc::ptr_eq(active, record));
         if !exact
-            || scheduler.active.contains_key(&record.operation)
             || record
                 .state
                 .compare_exchange(
@@ -1315,9 +1352,7 @@ impl ServiceInner {
             registry.records.remove(&record.operation);
             return Err(ServiceError::StaleCapability);
         };
-        scheduler
-            .active
-            .insert(record.operation, Arc::clone(&state));
+        *lock(&record.operation_state) = Some(Arc::downgrade(&state));
         self.scheduler_changed.notify_all();
         drop(registry);
         drop(scheduler);
@@ -1337,16 +1372,16 @@ impl ServiceInner {
     }
 
     fn discard_transition_execution(&self, state: &Arc<OperationState>, error: ServiceError) {
-        let mut scheduler = lock(&self.scheduler);
-        let exact = scheduler
-            .active
-            .get(&state.id)
-            .is_some_and(|active| Arc::ptr_eq(active, state));
-        if exact {
-            scheduler.active.remove(&state.id);
-        }
-        drop(scheduler);
-        state.finish(Err(error));
+        state.finish_transition(Err(error));
+        self.scheduler_changed.notify_all();
+    }
+
+    fn finish_transition_execution(
+        &self,
+        state: &Arc<OperationState>,
+        outcome: Result<(), ServiceError>,
+    ) {
+        state.finish_transition(outcome);
         self.scheduler_changed.notify_all();
     }
 
@@ -1404,10 +1439,11 @@ impl ServiceInner {
             state: AtomicU8::new(TRANSITION_PENDING),
             action: Mutex::new(Some(PendingAction::Freshness { action, view })),
             verifier: Mutex::new(None),
+            presentation: None,
             offered: AtomicU8::new(0),
             resolution: Mutex::new(None),
             resolution_changed: Condvar::new(),
-            operation_state: Some(Arc::downgrade(state)),
+            operation_state: Mutex::new(Some(Arc::downgrade(state))),
         });
         {
             let mut registry = lock(&self.transitions);
@@ -1465,7 +1501,7 @@ impl ServiceInner {
                     && session.current_generation() == Some(record.generation)
             }),
             TransitionKind::Freshness => {
-                let exact_operation = record.operation_state.as_ref().is_some_and(|weak| {
+                let exact_operation = lock(&record.operation_state).as_ref().is_some_and(|weak| {
                     weak.upgrade().is_some_and(|state| {
                         state.is_running()
                             && !state.cancelled.load(Ordering::Acquire)
@@ -1522,6 +1558,7 @@ impl ServiceInner {
 
     fn complete_transition(&self, record: &Arc<TransitionRecord>) {
         drop(lock(&record.verifier).take());
+        clear_presentation(record);
         let mut registry = lock(&self.transitions);
         let exact = registry
             .records
@@ -1565,6 +1602,7 @@ impl ServiceInner {
             registry.records.remove(&record.operation);
             drop(registry);
             drop(lock(&record.verifier).take());
+            clear_presentation(record);
             lock(&record.action).take()
         };
         self.abort_cancelled_transition(record, action);
@@ -1619,6 +1657,7 @@ impl ServiceInner {
         };
         while let Some(record) = detached.pop() {
             drop(lock(&record.verifier).take());
+            clear_presentation(&record);
             let action = lock(&record.action).take();
             self.abort_cancelled_transition(&record, action);
         }
@@ -1676,6 +1715,16 @@ impl ServiceHandle {
         ))
     }
 
+    /// Builds an unlock-aware facade whose status and list commands use production leases.
+    pub fn with_local_use_cases(
+        config: ServiceConfig,
+        executor: Arc<dyn OperationExecutor>,
+        random: Arc<dyn OperationIdRandom>,
+        components: SessionComponents,
+    ) -> Result<(Self, TrustedActivityHandle), ServiceError> {
+        Self::with_session_components(config, executor, random, components)
+    }
+
     fn build(
         config: ServiceConfig,
         executor: Arc<dyn OperationExecutor>,
@@ -1697,6 +1746,7 @@ impl ServiceHandle {
             .ok_or(ServiceError::InvalidConfiguration)?;
         let (cancellation_sender, cancellation_receiver) = bounded(cancellation_capacity);
         let (control_sender, control_receiver) = bounded(observer_capacity);
+        let (security_sender, security_receiver) = bounded::<SecurityJob>(1);
         let inner = Arc::new(ServiceInner {
             config,
             executor,
@@ -1708,6 +1758,8 @@ impl ServiceHandle {
             worker_sender: Mutex::new(Some(worker_sender)),
             cancellation_sender: Mutex::new(Some(cancellation_sender)),
             control_sender: Mutex::new(Some(control_sender)),
+            security_sender: Mutex::new(Some(security_sender)),
+            security_busy: AtomicBool::new(false),
             identity: Mutex::new(IdentityState {
                 nonce: None,
                 next: 0,
@@ -1716,6 +1768,18 @@ impl ServiceHandle {
             transitions: Mutex::new(TransitionRegistry::new(config.completed_capacity)?),
             observer_in_flight: AtomicUsize::new(0),
         });
+
+        thread::Builder::new()
+            .name("notecrypt-service-security-worker".to_owned())
+            .spawn(move || {
+                while let Ok(job) = security_receiver.recv() {
+                    job();
+                }
+            })
+            .map_err(|_| {
+                inner.shutdown();
+                ServiceError::InvalidConfiguration
+            })?;
 
         for index in 0..config.workers {
             let worker_inner = Arc::clone(&inner);
@@ -1978,6 +2042,14 @@ impl ServiceHandle {
         &self,
         secret: RecoverySecretInput,
     ) -> Result<SessionSummary, ServiceError> {
+        let service = self.clone();
+        self.run_security_job(move || service.unlock_with_recovery_on_security_worker(secret))
+    }
+
+    fn unlock_with_recovery_on_security_worker(
+        &self,
+        secret: RecoverySecretInput,
+    ) -> Result<SessionSummary, ServiceError> {
         let inner = &self.client.inner;
         let session = inner
             .session
@@ -2096,6 +2168,22 @@ impl ServiceHandle {
         ),
         ServiceError,
     > {
+        let service = self.clone();
+        self.run_security_job(move || {
+            service.begin_recovery_initialization_on_security_worker(request)
+        })
+    }
+
+    fn begin_recovery_initialization_on_security_worker(
+        &self,
+        request: BeginRecoveryInitialization,
+    ) -> Result<
+        (
+            PendingRecoveryInitialization,
+            Option<RecoverySecretPresentation>,
+        ),
+        ServiceError,
+    > {
         let inner = &self.client.inner;
         let session = inner
             .session
@@ -2134,24 +2222,16 @@ impl ServiceHandle {
             return Err(ServiceError::StaleCapability);
         }
         let mut key = Zeroizing::new([0_u8; 32]);
-        let entropy = catch_unwind(AssertUnwindSafe(|| {
-            fill_exact(inner.random.as_ref(), &mut *key)
-        }))
-        .unwrap_or(Err(ServiceError::EntropyUnavailable));
+        let entropy = catch_unwind(AssertUnwindSafe(|| fill_security_entropy(&mut *key)))
+            .unwrap_or(Err(ServiceError::EntropyUnavailable));
         if let Err(error) = entropy {
             inner.clear_prepare(TransitionKind::Recovery, &cancel);
             inner.abort_pending_action(PendingAction::Recovery(prepared.action));
             return Err(error);
         }
-        let (presentation, expected) = if prepared.generated {
-            match prepared.secret.into_presentation(generation.max(1), &key) {
-                Ok((presentation, expected)) => (Some(presentation), expected),
-                Err(_) => {
-                    inner.clear_prepare(TransitionKind::Recovery, &cancel);
-                    inner.abort_pending_action(PendingAction::Recovery(prepared.action));
-                    return Err(ServiceError::InvalidConfiguration);
-                }
-            }
+        let (presentation_secret, expected) = if prepared.generated {
+            let (payload, expected) = prepared.secret.into_presentation_payload(&key);
+            (Some(Arc::new(Mutex::new(Some(payload)))), expected)
         } else {
             (None, prepared.secret.into_verifier(&key))
         };
@@ -2160,8 +2240,10 @@ impl ServiceHandle {
             generation,
             PendingAction::Recovery(prepared.action),
             Some(SecretVerifier { key, expected }),
+            presentation_secret.as_ref().map(Arc::clone),
             &cancel,
         )?;
+        let presentation = presentation_secret.map(RecoverySecretPresentation::from_shared);
         Ok((
             PendingRecoveryInitialization::new(inner, record),
             presentation,
@@ -2169,6 +2251,17 @@ impl ServiceHandle {
     }
 
     pub fn confirm_recovery_initialization(
+        &self,
+        pending: PendingRecoveryInitialization,
+        confirmation: RecoverySecretInput,
+    ) -> Result<VaultSummary, ServiceError> {
+        let service = self.clone();
+        self.run_security_job(move || {
+            service.confirm_recovery_initialization_on_security_worker(pending, confirmation)
+        })
+    }
+
+    fn confirm_recovery_initialization_on_security_worker(
         &self,
         mut pending: PendingRecoveryInitialization,
         confirmation: RecoverySecretInput,
@@ -2183,6 +2276,7 @@ impl ServiceHandle {
             self.client.inner.complete_transition(&record);
             return Err(ServiceError::StaleCapability);
         };
+        clear_presentation(&record);
         let verifier = lock(&record.verifier).take();
         let Some(verifier) = verifier else {
             self.client
@@ -2253,18 +2347,67 @@ impl ServiceHandle {
                 Err(ServiceError::CleanupRequired)
             }
         };
-        self.client.inner.finish(
+        self.client.inner.finish_transition_execution(
             &state,
-            result
-                .as_ref()
-                .map(|_| OperationResult::SecurityTransitionCompleted)
-                .map_err(|error| *error),
+            result.as_ref().map(|_| ()).map_err(|error| *error),
         );
         if matches!(result, Err(ServiceError::CleanupRequired)) {
             self.client.inner.latch_cleanup_required();
         }
         self.client.inner.complete_transition(&record);
         result
+    }
+
+    fn run_security_job<T: Send + 'static>(
+        &self,
+        action: impl FnOnce() -> Result<T, ServiceError> + Send + 'static,
+    ) -> Result<T, ServiceError> {
+        if self
+            .client
+            .inner
+            .security_busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(ServiceError::Busy);
+        }
+        let (result_sender, result_receiver) = bounded(1);
+        let inner = Arc::clone(&self.client.inner);
+        let job: SecurityJob = Box::new(move || {
+            let result = catch_unwind(AssertUnwindSafe(action)).unwrap_or_else(|_| {
+                inner.latch_cleanup_required();
+                Err(ServiceError::CleanupRequired)
+            });
+            inner.security_busy.store(false, Ordering::Release);
+            let _ = result_sender.send(result);
+        });
+        let security_sender = lock(&self.client.inner.security_sender);
+        let Some(sender) = security_sender.as_ref() else {
+            self.client
+                .inner
+                .security_busy
+                .store(false, Ordering::Release);
+            return Err(ServiceError::Closed);
+        };
+        match sender.try_send(job) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.client
+                    .inner
+                    .security_busy
+                    .store(false, Ordering::Release);
+                return Err(ServiceError::Busy);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.client
+                    .inner
+                    .security_busy
+                    .store(false, Ordering::Release);
+                return Err(ServiceError::Closed);
+            }
+        }
+        drop(security_sender);
+        result_receiver.recv().unwrap_or(Err(ServiceError::Closed))
     }
 
     pub fn cancel_recovery_initialization(
@@ -2330,26 +2473,20 @@ impl ServiceHandle {
                 return Err(ServiceError::StaleCapability);
             }
         }
-        let (presentation, verifier) = if let Some(secret) = prepared.secret {
+        let (presentation_secret, verifier) = if let Some(secret) = prepared.secret {
             let mut key = Zeroizing::new([0_u8; 32]);
-            let entropy = catch_unwind(AssertUnwindSafe(|| {
-                fill_exact(inner.random.as_ref(), &mut *key)
-            }))
-            .unwrap_or(Err(ServiceError::EntropyUnavailable));
+            let entropy = catch_unwind(AssertUnwindSafe(|| fill_security_entropy(&mut *key)))
+                .unwrap_or(Err(ServiceError::EntropyUnavailable));
             if let Err(error) = entropy {
                 inner.clear_prepare(TransitionKind::Compromise, &cancel);
                 inner.abort_pending_action(PendingAction::Compromise(prepared.action));
                 return Err(error);
             }
-            let (presentation, expected) = match secret.into_presentation(generation.max(1), &key) {
-                Ok(value) => value,
-                Err(_) => {
-                    inner.clear_prepare(TransitionKind::Compromise, &cancel);
-                    inner.abort_pending_action(PendingAction::Compromise(prepared.action));
-                    return Err(ServiceError::InvalidConfiguration);
-                }
-            };
-            (Some(presentation), Some(SecretVerifier { key, expected }))
+            let (payload, expected) = secret.into_presentation_payload(&key);
+            (
+                Some(Arc::new(Mutex::new(Some(payload)))),
+                Some(SecretVerifier { key, expected }),
+            )
         } else {
             (None, None)
         };
@@ -2358,8 +2495,10 @@ impl ServiceHandle {
             generation,
             PendingAction::Compromise(prepared.action),
             verifier,
+            presentation_secret.as_ref().map(Arc::clone),
             &cancel,
         )?;
+        let presentation = presentation_secret.map(RecoverySecretPresentation::from_shared);
         Ok((PendingCompromiseRekey::new(inner, record), presentation))
     }
 
@@ -2367,7 +2506,7 @@ impl ServiceHandle {
         &self,
         mut pending: PendingCompromiseRekey,
         confirmation: CompromiseRekeyConfirmation,
-    ) -> Result<OperationHandle, ServiceError> {
+    ) -> Result<SecurityTransitionHandle, ServiceError> {
         let record = pending.claim_for(&self.client.inner)?;
         let (action, state) = self.client.inner.claim_security_transition(&record)?;
         pending.disarm();
@@ -2379,6 +2518,7 @@ impl ServiceHandle {
             return Err(ServiceError::StaleCapability);
         };
         let (first, matching) = confirmation.into_parts();
+        clear_presentation(&record);
         let verifier = lock(&record.verifier).take();
         let confirmation = if let Some(verifier) = verifier {
             if matching.is_some() {
@@ -2419,7 +2559,7 @@ impl ServiceHandle {
                 return Err(ServiceError::AuthenticationFailed);
             };
             let mut key = Zeroizing::new([0_u8; 32]);
-            if let Err(error) = fill_exact(self.client.inner.random.as_ref(), &mut *key) {
+            if let Err(error) = fill_security_entropy(&mut *key) {
                 self.client
                     .inner
                     .abort_pending_action(PendingAction::Compromise(action));
@@ -2487,7 +2627,7 @@ impl ServiceHandle {
                     .inner
                     .abort_pending_action(PendingAction::Compromise(action));
             }
-            state.finish(Err(ServiceError::Closed));
+            state.finish_transition(Err(ServiceError::Closed));
             self.client.inner.complete_transition(&record);
             return Err(ServiceError::Closed);
         };
@@ -2500,7 +2640,7 @@ impl ServiceHandle {
                     .inner
                     .abort_pending_action(PendingAction::Compromise(action));
             }
-            state.finish(Err(ServiceError::Busy));
+            state.finish_transition(Err(ServiceError::Busy));
             self.client.inner.complete_transition(&record);
             return Err(ServiceError::Busy);
         }
@@ -2520,12 +2660,12 @@ impl ServiceHandle {
                         .inner
                         .abort_pending_action(PendingAction::Compromise(action));
                 }
-                state.finish(Err(ServiceError::Closed));
+                state.finish_transition(Err(ServiceError::Closed));
                 self.client.inner.complete_transition(&record);
                 return Err(ServiceError::Closed);
             }
         }
-        Ok(OperationHandle::new(
+        Ok(SecurityTransitionHandle::new(
             state,
             Arc::downgrade(&self.client.inner),
         ))
@@ -2560,8 +2700,7 @@ impl ServiceHandle {
                     .ok_or(ServiceError::StaleCapability)?,
             )
         };
-        let state = record
-            .operation_state
+        let state = lock(&record.operation_state)
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .ok_or(ServiceError::StaleCapability)?;
@@ -2714,11 +2853,16 @@ impl TrustedActivityHandle {
 }
 
 fn discard_work_item(inner: &ServiceInner, item: WorkItem, error: ServiceError) {
-    if let WorkPayload::Compromise { action, record, .. } = item.payload {
-        inner.abort_pending_action(PendingAction::Compromise(action));
-        inner.complete_transition(&record);
+    match item.payload {
+        WorkPayload::Compromise { action, record, .. } => {
+            inner.abort_pending_action(PendingAction::Compromise(action));
+            inner.complete_transition(&record);
+            item.state.finish_transition(Err(error));
+        }
+        WorkPayload::Command(_) => {
+            item.state.finish(Err(error));
+        }
     }
-    item.state.finish(Err(error));
 }
 
 fn coordinator_loop(inner: Arc<ServiceInner>) {
@@ -2921,24 +3065,31 @@ fn worker_loop(inner: Arc<ServiceInner>, receiver: Receiver<WorkItem>) {
             }
             continue;
         }
-        let context = OperationContext::new(Arc::clone(&item.state), Arc::downgrade(&inner));
-        let started = context
-            .safe_boundary()
-            .and_then(|()| item.state.publish(crate::OperationEvent::Started));
-        let (outcome, transition) = match item.payload {
+        match item.payload {
             WorkPayload::Command(command) => {
+                let context =
+                    OperationContext::new(Arc::clone(&item.state), Arc::downgrade(&inner));
+                let started = context
+                    .safe_boundary()
+                    .and_then(|()| item.state.publish(crate::OperationEvent::Started));
                 let outcome = if let Err(error) = started {
                     Err(error)
                 } else {
-                    match catch_unwind(AssertUnwindSafe(|| {
-                        inner.executor.execute(command, &context)
+                    match catch_unwind(AssertUnwindSafe(|| match command {
+                        Command::List(_) if inner.session.is_some() => {
+                            crate::local_use_cases::list_entries(&inner, &item.state, &context)
+                        }
+                        Command::Status(_) if inner.session.is_some() => {
+                            crate::local_use_cases::status(&inner, &item.state, &context)
+                        }
+                        command => inner.executor.execute(command, &context),
                     })) {
                         Ok(Ok(result)) => context.safe_boundary().map(|()| result),
                         Ok(Err(error)) => Err(error),
                         Err(_) => Err(ServiceError::WorkerPanicked),
                     }
                 };
-                (outcome, None)
+                inner.finish(&item.state, outcome);
             }
             WorkPayload::Compromise {
                 action,
@@ -2946,29 +3097,19 @@ fn worker_loop(inner: Arc<ServiceInner>, receiver: Receiver<WorkItem>) {
                 record,
             } => {
                 let repository_cancellation = item.state.repository_cancellation();
-                let outcome = if let Err(error) = started {
-                    inner.abort_pending_action(PendingAction::Compromise(action));
-                    Err(error)
-                } else {
-                    match catch_unwind(AssertUnwindSafe(|| {
-                        action.confirm(confirmation, repository_cancellation.as_ref())
-                    })) {
-                        Ok(result) => result
-                            .map(|()| OperationResult::SecurityTransitionCompleted)
-                            .map_err(crate::session::map_repository_error),
-                        Err(_) => Err(ServiceError::CleanupRequired),
-                    }
+                let outcome = match catch_unwind(AssertUnwindSafe(|| {
+                    action.confirm(confirmation, repository_cancellation.as_ref())
+                })) {
+                    Ok(result) => result.map_err(crate::session::map_repository_error),
+                    Err(_) => Err(ServiceError::CleanupRequired),
                 };
                 if matches!(outcome, Err(ServiceError::CleanupRequired)) {
                     inner.latch_cleanup_required();
                 }
-                (outcome, Some(record))
+                inner.complete_transition(&record);
+                inner.finish_transition_execution(&item.state, outcome);
             }
-        };
-        if let Some(record) = &transition {
-            inner.complete_transition(record);
         }
-        inner.finish(&item.state, outcome);
     }
 }
 
@@ -2995,6 +3136,10 @@ fn fill_exact(random: &dyn OperationIdRandom, destination: &mut [u8]) -> Result<
             .ok_or(ServiceError::EntropyUnavailable)?;
     }
     Ok(())
+}
+
+fn fill_security_entropy(destination: &mut [u8]) -> Result<(), ServiceError> {
+    getrandom::fill(destination).map_err(|_| ServiceError::EntropyUnavailable)
 }
 
 #[cfg(test)]

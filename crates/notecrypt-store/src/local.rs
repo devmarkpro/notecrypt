@@ -205,11 +205,83 @@ impl RepositoryListedEntry {
     pub const fn revision_id(&self) -> Option<RevisionId> {
         self.revision
     }
+
+    #[must_use]
+    pub fn into_parts(
+        mut self,
+    ) -> (
+        RepositoryEntryId,
+        RepositoryEntryId,
+        String,
+        RepositoryEntryKind,
+        Option<RevisionId>,
+    ) {
+        (
+            self.id,
+            self.parent,
+            std::mem::take(&mut self.name),
+            self.kind,
+            self.revision,
+        )
+    }
 }
 
 impl Drop for RepositoryListedEntry {
     fn drop(&mut self) {
         self.name.zeroize();
+    }
+}
+
+/// One coherent authenticated observation of the current logical vault tree.
+pub struct RepositoryAuthenticatedView {
+    snapshot: SnapshotId,
+    root: RepositoryEntryId,
+    entries: Vec<RepositoryListedEntry>,
+}
+
+/// Fixed-size projection of one authenticated current head and logical tree.
+pub struct RepositoryAuthenticatedStatus {
+    snapshot: SnapshotId,
+    root: RepositoryEntryId,
+    entry_count: usize,
+}
+
+impl RepositoryAuthenticatedStatus {
+    #[must_use]
+    pub fn snapshot_id(&self) -> SnapshotId {
+        self.snapshot
+    }
+
+    #[must_use]
+    pub fn root_entry_id(&self) -> RepositoryEntryId {
+        self.root
+    }
+
+    #[must_use]
+    pub fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+}
+
+impl RepositoryAuthenticatedView {
+    #[must_use]
+    pub fn snapshot_id(&self) -> SnapshotId {
+        self.snapshot
+    }
+
+    #[must_use]
+    pub fn root_entry_id(&self) -> RepositoryEntryId {
+        self.root
+    }
+
+    #[must_use]
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn into_entries(self) -> Vec<RepositoryListedEntry> {
+        self.entries
     }
 }
 
@@ -625,7 +697,7 @@ impl VaultStore {
         cancel: &AtomicBool,
     ) -> Result<UnlockedVault, StoreError> {
         let (keys, bootstrap_bytes) = self.recovery_keys(passphrase, cancel)?;
-        unlock_with_keys(self, keys, Some(bootstrap_bytes))
+        unlock_with_keys(self, keys, Some(bootstrap_bytes), Some(cancel))
     }
 
     pub fn authorize_repair(
@@ -696,7 +768,7 @@ impl VaultStore {
         .map_err(|_| StoreError::AuthenticationFailed)?;
         let recovery_key =
             derive_recovery_wrapping_key(&passphrase, kdf.salt(), parameters, cancel)
-                .map_err(map_random)?;
+                .map_err(map_unlock_crypto)?;
         let reread = read_exact_bounded(&mut bootstrap_file, 1 << 20)?;
         let named = self
             .layout
@@ -761,6 +833,10 @@ fn initialize_new_target(
     } else {
         VaultAvailability::Active
     };
+    #[cfg(feature = "test-support")]
+    test_support::check_initialization_entropy(
+        test_support::InitializationEntropyStage::VaultIdentity,
+    )?;
     let vault = generate_vault_id(&mut random, forbidden_vault)?;
     let salt = generate_random_16(&mut random)?;
     let selected = parameters.parameters();
@@ -771,8 +847,18 @@ fn initialize_new_target(
         selected.parallelism,
         &salt,
     )?;
+    #[cfg(feature = "test-support")]
+    test_support::check_initialization_kdf(
+        test_support::InitializationKdfFaultPoint::BeforeStart,
+        cancel,
+    );
     let recovery_key =
         derive_recovery_wrapping_key(&passphrase, &salt, parameters, cancel).map_err(map_random)?;
+    #[cfg(feature = "test-support")]
+    test_support::check_initialization_kdf(
+        test_support::InitializationKdfFaultPoint::AfterComputation,
+        cancel,
+    );
     if cancel.load(Ordering::Acquire) {
         return Err(StoreError::Cancelled);
     }
@@ -789,21 +875,29 @@ fn initialize_new_target(
             return Err(StoreError::Cancelled);
         }
         let root = VaultRootKey::generate(&mut random).map_err(map_random)?;
+        #[cfg(feature = "test-support")]
+        test_support::check_initialization_entropy(
+            test_support::InitializationEntropyStage::RecoverySlotIdentity,
+        )?;
         let bootstrap = build_bootstrap(vault, kdf, &root, &recovery_key, &mut random)?;
         write_bootstrap(&store, &bootstrap)?;
         if cancel.load(Ordering::Acquire) {
             return Err(StoreError::Cancelled);
         }
         let authenticated_bootstrap: Arc<[u8]> = Arc::from(bootstrap);
-        let keys = initialize_empty_graph(&store, root, device_label, &mut random)?;
+        let keys = initialize_empty_graph(&store, root, device_label, &mut random, cancel)?;
         #[cfg(feature = "test-support")]
         test_support::run_before_initial_availability_hook();
+        #[cfg(feature = "test-support")]
+        test_support::run_before_initial_availability_send_hook();
         if cancel.load(Ordering::Acquire) {
             let _ = keys.close();
             return Err(StoreError::Cancelled);
         }
         let generation = keys.generation();
         crate::availability::write_initial(&store.layout, &keys, generation, availability)?;
+        #[cfg(feature = "test-support")]
+        test_support::run_after_initial_availability_hook();
         if availability == VaultAvailability::Inactive {
             write_pending_activation_marker(&store)?;
         }
@@ -838,22 +932,35 @@ pub(crate) fn unlock_with_keys(
     store: &Arc<VaultStore>,
     keys: Arc<KeyCell>,
     authenticated_bootstrap: Option<Arc<[u8]>>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<UnlockedVault, StoreError> {
     let generation = keys.generation();
     let unlock_result = (|| {
+        check_graph_boundary(&keys, generation, cancel)?;
+        #[cfg(feature = "test-support")]
+        test_support::run_after_recovery_keys_hook(store.layout.vault);
         let batch = store.begin_durable_batch()?;
         recover(
             &store.layout,
             batch,
             &keys,
-            |id, file| authenticate_any_object(&keys, generation, store.layout.vault, *id, file),
-            |head| verify_complete_head(store, &keys, generation, head).map(|_| ()),
+            |id, file| {
+                check_graph_boundary(&keys, generation, cancel)?;
+                let result =
+                    authenticate_any_object(&keys, generation, store.layout.vault, *id, file);
+                check_graph_boundary(&keys, generation, cancel)?;
+                result
+            },
+            |head| verify_complete_head(store, &keys, generation, head, cancel).map(|_| ()),
+            cancel,
         )?;
+        check_graph_boundary(&keys, generation, cancel)?;
         crate::trusted_remote::authenticate_trusted_remote_if_present(
             &store.layout,
             &keys,
             generation,
         )?;
+        check_graph_boundary(&keys, generation, cancel)?;
         let mut cleanup = crate::cleanup::CleanupRegistry::new(
             store.layout.vault,
             generation,
@@ -862,6 +969,7 @@ pub(crate) fn unlock_with_keys(
             FilesystemCleanupPersistence::new(&store.layout.cleanup_registry),
         )?;
         cleanup.authenticated_records(keys.as_ref())?;
+        check_graph_boundary(&keys, generation, cancel)?;
         let mut devices = DeviceSlotRegistry::new(
             store.layout.vault,
             generation,
@@ -869,12 +977,15 @@ pub(crate) fn unlock_with_keys(
             FilesystemDeviceSlotPersistence::new(&store.layout),
         )?;
         devices.authenticate_existing(&keys)?;
+        check_graph_boundary(&keys, generation, cancel)?;
         devices.authenticate_all_local_records(&keys)?;
+        check_graph_boundary(&keys, generation, cancel)?;
         recover_or_require_active(store, &keys, generation)?;
+        check_graph_boundary(&keys, generation, cancel)?;
         let verified_chunks = if let Some(head) =
             read_and_authenticate_current_head(&store.layout, &keys, generation)?
         {
-            verify_complete_head_record(store, &keys, generation, &head)?
+            verify_complete_head_record_observed(store, &keys, generation, &head, cancel, None)?
         } else {
             HashMap::new()
         };
@@ -1047,7 +1158,7 @@ impl UnlockedVaultLease {
         let mut output = Vec::new();
         output
             .try_reserve_exact(tree.entries().len())
-            .map_err(|_| StoreError::LimitExceeded)?;
+            .map_err(|_| StoreError::AllocationFailed)?;
         for entry in tree.entries() {
             if let TreeEntry::File {
                 id, name, locator, ..
@@ -1056,7 +1167,7 @@ impl UnlockedVaultLease {
                 let mut owned_name = String::new();
                 owned_name
                     .try_reserve_exact(name.len())
-                    .map_err(|_| StoreError::LimitExceeded)?;
+                    .map_err(|_| StoreError::AllocationFailed)?;
                 owned_name.push_str(name);
                 output.push(RepositoryEntry {
                     file_id: FileId::from_bytes(*id),
@@ -1084,13 +1195,32 @@ impl UnlockedVaultLease {
     }
 
     pub fn list_entries(&mut self) -> Result<Vec<RepositoryListedEntry>, StoreError> {
-        self.keys.validate_generation(self.generation)?;
-        let (_head, tree) = self.current_tree()?;
+        self.authenticated_view(usize::MAX, &AtomicBool::new(false))
+            .map(RepositoryAuthenticatedView::into_entries)
+    }
+
+    pub fn authenticated_view(
+        &mut self,
+        max_entries: usize,
+        cancel: &AtomicBool,
+    ) -> Result<RepositoryAuthenticatedView, StoreError> {
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        #[cfg(feature = "test-support")]
+        test_support::check_authenticated_read_fault(
+            self.store.layout.vault,
+            test_support::AuthenticatedReadFault::ViewAllocation,
+        )?;
+        let (head, tree) = self.current_tree_with_cancel(cancel)?;
+        let entry_count = tree.entries().len().saturating_sub(1);
+        if entry_count > max_entries {
+            return Err(StoreError::LimitExceeded);
+        }
         let mut output = Vec::new();
         output
-            .try_reserve_exact(tree.entries().len().saturating_sub(1))
-            .map_err(|_| StoreError::LimitExceeded)?;
+            .try_reserve_exact(entry_count)
+            .map_err(|_| StoreError::AllocationFailed)?;
         for entry in tree.entries() {
+            check_boundary(self.keys.as_ref(), self.generation, cancel)?;
             let listed = match entry {
                 TreeEntry::Root { .. } => continue,
                 TreeEntry::File {
@@ -1130,8 +1260,36 @@ impl UnlockedVaultLease {
             };
             output.push(listed);
         }
-        self.keys.validate_generation(self.generation)?;
-        Ok(output)
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        Ok(RepositoryAuthenticatedView {
+            snapshot: head.snapshot,
+            root: RepositoryEntryId(*tree.root()),
+            entries: output,
+        })
+    }
+
+    pub fn authenticated_status(
+        &mut self,
+        max_entries: usize,
+        cancel: &AtomicBool,
+    ) -> Result<RepositoryAuthenticatedStatus, StoreError> {
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        #[cfg(feature = "test-support")]
+        test_support::check_authenticated_read_fault(
+            self.store.layout.vault,
+            test_support::AuthenticatedReadFault::StatusAllocation,
+        )?;
+        let (head, tree) = self.current_tree_with_cancel(cancel)?;
+        let entry_count = tree.entries().len().saturating_sub(1);
+        if entry_count > max_entries {
+            return Err(StoreError::LimitExceeded);
+        }
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        Ok(RepositoryAuthenticatedStatus {
+            snapshot: head.snapshot,
+            root: RepositoryEntryId(*tree.root()),
+            entry_count,
+        })
     }
 
     pub fn apply(
@@ -1757,6 +1915,27 @@ impl UnlockedVaultLease {
         Ok((head, tree))
     }
 
+    fn current_tree_with_cancel(
+        &self,
+        cancel: &AtomicBool,
+    ) -> Result<(crate::transaction::AuthenticatedHead, LogicalTree), StoreError> {
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        let head = read_and_authenticate_current_head(
+            &self.store.layout,
+            self.keys.as_ref(),
+            self.generation,
+        )?
+        .ok_or(StoreError::NotFound)?;
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        let mut tree_file = self.store.open_object(&head.tree_object)?;
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        let tree =
+            self.keys
+                .decrypt_local_tree(self.generation, head.tree_object, &mut tree_file)?;
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        Ok((head, tree))
+    }
+
     pub(crate) fn commit_parentless_current_state(
         &mut self,
         publication_guard: &mut dyn PublicationGuard,
@@ -2116,7 +2295,7 @@ fn copy_string(value: &str) -> Result<String, StoreError> {
     let mut output = String::new();
     output
         .try_reserve_exact(value.len())
-        .map_err(|_| StoreError::LimitExceeded)?;
+        .map_err(|_| StoreError::AllocationFailed)?;
     output.push_str(value);
     Ok(output)
 }
@@ -2287,22 +2466,33 @@ pub(crate) fn initialize_empty_graph(
     root: VaultRootKey,
     device_label: &str,
     random: &mut dyn SecureRandom,
+    cancel: &AtomicBool,
 ) -> Result<Arc<KeyCell>, StoreError> {
     let keys = Arc::new(KeyCell::new(root)?);
     let generation = keys.generation();
     let logical_root = generate_random_16(random)?;
+    #[cfg(feature = "test-support")]
+    test_support::check_initialization_entropy(
+        test_support::InitializationEntropyStage::ObjectIdentity,
+    )?;
     let tree_object = generate_unique_object(store, random)?;
     let tree = LogicalTree::try_new(
         logical_root,
         vec![TreeEntry::root(logical_root)],
         &DecodeLimits::PHASE_1,
     )?;
+    #[cfg(feature = "test-support")]
+    test_support::check_initialization_entropy(test_support::InitializationEntropyStage::Nonce)?;
     let tree_wire = keys.encrypt_local_tree(
         generation,
         store.layout.vault,
         tree_object,
         encode_tree(&tree)?,
         random,
+    )?;
+    #[cfg(feature = "test-support")]
+    test_support::check_initialization_entropy(
+        test_support::InitializationEntropyStage::SnapshotIdentity,
     )?;
     let snapshot = generate_snapshot_id(random)?;
     let snapshot_object = generate_unique_object(store, random)?;
@@ -2358,7 +2548,7 @@ pub(crate) fn initialize_empty_graph(
             authenticate_any_object(keys.as_ref(), generation, store.layout.vault, *id, file)
         },
         &mut InitializationGuard,
-        &AtomicBool::new(false),
+        cancel,
     );
     result?;
     Ok(keys)
@@ -2393,7 +2583,7 @@ fn detect_object_kind(file: &mut FileCapability) -> Result<crate::ImportedObject
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(usize::try_from(length).map_err(|_| StoreError::LimitExceeded)?)
-        .map_err(|_| StoreError::LimitExceeded)?;
+        .map_err(|_| StoreError::AllocationFailed)?;
     file.seek(SeekFrom::Start(0))?;
     file.take(length.checked_add(1).ok_or(StoreError::LimitExceeded)?)
         .read_to_end(&mut bytes)?;
@@ -2425,9 +2615,10 @@ fn verify_complete_head(
     keys: &KeyCell,
     generation: u64,
     canonical_head: &[u8],
+    cancel: Option<&AtomicBool>,
 ) -> Result<HashMap<ObjectId, VerifiedChunkStamp>, StoreError> {
     let head = authenticate_head(canonical_head, keys, generation)?;
-    verify_complete_head_record(store, keys, generation, &head)
+    verify_complete_head_record_observed(store, keys, generation, &head, cancel, None)
 }
 
 fn verify_complete_head_record(
@@ -2745,13 +2936,13 @@ where
     if !forward.contains_key(&key) {
         forward
             .try_reserve(1)
-            .map_err(|_| StoreError::LimitExceeded)?;
+            .map_err(|_| StoreError::AllocationFailed)?;
         forward.insert(key, value);
     }
     if !reverse.contains_key(&value) {
         reverse
             .try_reserve(1)
-            .map_err(|_| StoreError::LimitExceeded)?;
+            .map_err(|_| StoreError::AllocationFailed)?;
         reverse.insert(value, key);
     }
     Ok(())
@@ -2764,7 +2955,8 @@ where
     if set.contains(&value) {
         return Ok(false);
     }
-    set.try_reserve(1).map_err(|_| StoreError::LimitExceeded)?;
+    set.try_reserve(1)
+        .map_err(|_| StoreError::AllocationFailed)?;
     Ok(set.insert(value))
 }
 
@@ -2815,7 +3007,7 @@ fn verify_tree_structure(tree: &LogicalTree) -> Result<(), StoreError> {
     let mut directories = HashSet::new();
     directories
         .try_reserve(tree.entries().len())
-        .map_err(|_| StoreError::LimitExceeded)?;
+        .map_err(|_| StoreError::AllocationFailed)?;
     directories.insert(root);
     for entry in tree.entries() {
         if let TreeEntry::Directory { id, .. } = entry {
@@ -2891,7 +3083,7 @@ fn read_exact_bounded(file: &mut FileCapability, maximum: u64) -> Result<Vec<u8>
     let mut output = Vec::new();
     output
         .try_reserve_exact(capacity)
-        .map_err(|_| StoreError::LimitExceeded)?;
+        .map_err(|_| StoreError::AllocationFailed)?;
     file.seek(SeekFrom::Start(0))?;
     let mut remaining = maximum.checked_add(1).ok_or(StoreError::LimitExceeded)?;
     let mut page = [0_u8; READ_PAGE_BYTES];
@@ -2977,10 +3169,34 @@ fn generate_random_16(random: &mut dyn SecureRandom) -> Result<[u8; 16], StoreEr
 }
 
 fn map_random(error: notecrypt_crypto::CryptoError) -> StoreError {
-    if matches!(error, notecrypt_crypto::CryptoError::RandomSource) {
-        StoreError::RandomSource
-    } else {
-        StoreError::AuthenticationFailed
+    match error {
+        notecrypt_crypto::CryptoError::RandomSource => StoreError::RandomSource,
+        notecrypt_crypto::CryptoError::Cancelled => StoreError::Cancelled,
+        notecrypt_crypto::CryptoError::Allocation => StoreError::AllocationFailed,
+        notecrypt_crypto::CryptoError::Authentication => StoreError::AuthenticationFailed,
+        notecrypt_crypto::CryptoError::PassphrasePolicy
+        | notecrypt_crypto::CryptoError::InvalidKdfParameters
+        | notecrypt_crypto::CryptoError::KeyDerivation
+        | notecrypt_crypto::CryptoError::CalibrationFailed
+        | notecrypt_crypto::CryptoError::InvalidEnvelope
+        | notecrypt_crypto::CryptoError::PlaintextTooLarge
+        | notecrypt_crypto::CryptoError::InvalidPlaintextLength => StoreError::InvalidInput,
+    }
+}
+
+fn map_unlock_crypto(error: notecrypt_crypto::CryptoError) -> StoreError {
+    match error {
+        notecrypt_crypto::CryptoError::RandomSource => StoreError::RandomSource,
+        notecrypt_crypto::CryptoError::Cancelled => StoreError::Cancelled,
+        notecrypt_crypto::CryptoError::Allocation => StoreError::AllocationFailed,
+        notecrypt_crypto::CryptoError::Authentication
+        | notecrypt_crypto::CryptoError::PassphrasePolicy
+        | notecrypt_crypto::CryptoError::KeyDerivation => StoreError::AuthenticationFailed,
+        notecrypt_crypto::CryptoError::InvalidKdfParameters
+        | notecrypt_crypto::CryptoError::CalibrationFailed
+        | notecrypt_crypto::CryptoError::InvalidEnvelope
+        | notecrypt_crypto::CryptoError::PlaintextTooLarge
+        | notecrypt_crypto::CryptoError::InvalidPlaintextLength => StoreError::InvalidInput,
     }
 }
 
@@ -3055,19 +3271,85 @@ mod activation_tests {
 pub mod test_support {
     use std::cell::RefCell;
     use std::io::Read;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use notecrypt_crypto::{CryptoError, OsRandom, RecoveryPassphrase, SecureRandom};
 
     use super::{
-        PublicationGuard, RepositorySnapshot, StoreError, UnlockedVaultLease, VaultRepair,
+        PublicationGuard, RepositorySnapshot, StoreError, UnlockedVaultLease, VaultId, VaultRepair,
         VaultRepairAction, VaultStore,
     };
 
     thread_local! {
         static BEFORE_INITIAL_AVAILABILITY: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static BEFORE_COMPROMISE_ACTIVATION: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    type SendHook = Box<dyn FnOnce() + Send + 'static>;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum InitializationEntropyStage {
+        VaultIdentity,
+        RecoverySlotIdentity,
+        SnapshotIdentity,
+        ObjectIdentity,
+        Nonce,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum InitializationKdfFault {
+        CancelBeforeStart,
+        CancelAfterComputation,
+        PanicBeforeStart,
+        PanicAfterComputation,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum InitializationKdfFaultPoint {
+        BeforeStart,
+        AfterComputation,
+    }
+
+    fn initialization_entropy_failure() -> &'static Mutex<Option<InitializationEntropyStage>> {
+        static STAGE: OnceLock<Mutex<Option<InitializationEntropyStage>>> = OnceLock::new();
+        STAGE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn initialization_entropy_panic() -> &'static Mutex<Option<InitializationEntropyStage>> {
+        static STAGE: OnceLock<Mutex<Option<InitializationEntropyStage>>> = OnceLock::new();
+        STAGE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn initialization_kdf_fault() -> &'static Mutex<Option<InitializationKdfFault>> {
+        static FAULT: OnceLock<Mutex<Option<InitializationKdfFault>>> = OnceLock::new();
+        FAULT.get_or_init(|| Mutex::new(None))
+    }
+
+    fn after_initial_availability() -> &'static Mutex<Option<SendHook>> {
+        static HOOK: OnceLock<Mutex<Option<SendHook>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    fn before_initial_availability_send() -> &'static Mutex<Option<SendHook>> {
+        static HOOK: OnceLock<Mutex<Option<SendHook>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    fn after_recovery_keys() -> &'static Mutex<Option<(VaultId, SendHook)>> {
+        static HOOK: OnceLock<Mutex<Option<(VaultId, SendHook)>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    fn authenticated_read_fault() -> &'static Mutex<Option<(VaultId, AuthenticatedReadFault)>> {
+        static FAULT: OnceLock<Mutex<Option<(VaultId, AuthenticatedReadFault)>>> = OnceLock::new();
+        FAULT.get_or_init(|| Mutex::new(None))
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum AuthenticatedReadFault {
+        ViewAllocation,
+        StatusAllocation,
     }
 
     pub fn install_before_initial_availability_hook(hook: impl FnOnce() + 'static) {
@@ -3087,6 +3369,123 @@ pub mod test_support {
         });
     }
 
+    pub fn install_after_initial_availability_hook(hook: impl FnOnce() + Send + 'static) {
+        let mut slot = after_initial_availability()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(slot.is_none(), "initialization hook already installed");
+        *slot = Some(Box::new(hook));
+    }
+
+    pub fn install_before_initial_availability_send_hook(hook: impl FnOnce() + Send + 'static) {
+        let mut slot = before_initial_availability_send()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(slot.is_none(), "initialization hook already installed");
+        *slot = Some(Box::new(hook));
+    }
+
+    pub fn install_after_recovery_keys_hook(vault: VaultId, hook: impl FnOnce() + Send + 'static) {
+        let mut slot = after_recovery_keys()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(slot.is_none(), "recovery unlock hook already installed");
+        *slot = Some((vault, Box::new(hook)));
+    }
+
+    pub fn fail_authenticated_read_at(vault: VaultId, fault: AuthenticatedReadFault) {
+        let mut selected = authenticated_read_fault()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(
+            selected.is_none(),
+            "authenticated read fault already installed"
+        );
+        *selected = Some((vault, fault));
+    }
+
+    pub fn fail_initialization_entropy_at(stage: InitializationEntropyStage) {
+        let mut selected = initialization_entropy_failure()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(selected.is_none(), "entropy failure already installed");
+        *selected = Some(stage);
+    }
+
+    pub fn panic_initialization_entropy_at(stage: InitializationEntropyStage) {
+        let mut selected = initialization_entropy_panic()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(selected.is_none(), "entropy panic already installed");
+        *selected = Some(stage);
+    }
+
+    pub fn fail_initialization_kdf_at(fault: InitializationKdfFault) {
+        let mut selected = initialization_kdf_fault()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(selected.is_none(), "KDF fault already installed");
+        *selected = Some(fault);
+    }
+
+    pub(crate) fn check_initialization_kdf(
+        point: InitializationKdfFaultPoint,
+        cancel: &AtomicBool,
+    ) {
+        let mut selected = initialization_kdf_fault()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let matches = matches!(
+            (*selected, point),
+            (
+                Some(InitializationKdfFault::CancelBeforeStart)
+                    | Some(InitializationKdfFault::PanicBeforeStart),
+                InitializationKdfFaultPoint::BeforeStart,
+            ) | (
+                Some(InitializationKdfFault::CancelAfterComputation)
+                    | Some(InitializationKdfFault::PanicAfterComputation),
+                InitializationKdfFaultPoint::AfterComputation,
+            )
+        );
+        if !matches {
+            return;
+        }
+        let fault = selected.take().expect("matching KDF fault is present");
+        drop(selected);
+        match fault {
+            InitializationKdfFault::CancelBeforeStart
+            | InitializationKdfFault::CancelAfterComputation => {
+                cancel.store(true, Ordering::Release);
+            }
+            InitializationKdfFault::PanicBeforeStart
+            | InitializationKdfFault::PanicAfterComputation => {
+                panic!("injected KDF boundary panic");
+            }
+        }
+    }
+
+    pub(crate) fn check_initialization_entropy(
+        stage: InitializationEntropyStage,
+    ) -> Result<(), StoreError> {
+        let mut selected = initialization_entropy_failure()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *selected == Some(stage) {
+            *selected = None;
+            return Err(StoreError::RandomSource);
+        }
+        drop(selected);
+        let mut panic_stage = initialization_entropy_panic()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *panic_stage == Some(stage) {
+            *panic_stage = None;
+            drop(panic_stage);
+            panic!("injected initialization entropy panic");
+        }
+        Ok(())
+    }
+
     pub(crate) fn run_before_initial_availability_hook() {
         BEFORE_INITIAL_AVAILABILITY.with(|slot| {
             if let Some(hook) = slot.borrow_mut().take() {
@@ -3101,6 +3500,56 @@ pub mod test_support {
                 hook();
             }
         });
+    }
+
+    pub(crate) fn run_after_initial_availability_hook() {
+        let hook = after_initial_availability()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(crate) fn run_before_initial_availability_send_hook() {
+        let hook = before_initial_availability_send()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(crate) fn run_after_recovery_keys_hook(vault: VaultId) {
+        let hook = {
+            let mut slot = after_recovery_keys()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match slot.as_ref() {
+                Some((target, _)) if *target == vault => slot.take().map(|(_, hook)| hook),
+                _ => None,
+            }
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(crate) fn check_authenticated_read_fault(
+        vault: VaultId,
+        fault: AuthenticatedReadFault,
+    ) -> Result<(), StoreError> {
+        let mut selected = authenticated_read_fault()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *selected == Some((vault, fault)) {
+            *selected = None;
+            Err(StoreError::AllocationFailed)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn authorize_repair_cancel_during_graph(

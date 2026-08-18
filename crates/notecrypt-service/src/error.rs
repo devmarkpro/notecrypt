@@ -35,6 +35,12 @@ pub enum ServiceError {
     TimedOut,
     /// Recovery authentication failed without exposing crypto details.
     AuthenticationFailed,
+    /// Authenticated repository state was malformed, inconsistent, or tampered.
+    IntegrityFailed,
+    /// A versioned or bounded caller input was invalid.
+    InvalidInput,
+    /// A required repository or host capability is unavailable.
+    Unavailable,
     /// Plaintext cleanup or authenticated cleanup-record reconciliation is required.
     CleanupRequired,
     /// The injected monotonic clock failed or moved backwards.
@@ -61,6 +67,9 @@ impl fmt::Display for ServiceError {
             Self::EventSequenceExhausted => "the operation event sequence was exhausted",
             Self::TimedOut => "the bounded service wait timed out",
             Self::AuthenticationFailed => "recovery authentication failed",
+            Self::IntegrityFailed => "authenticated repository integrity verification failed",
+            Self::InvalidInput => "the service input is invalid",
+            Self::Unavailable => "the required service capability is unavailable",
             Self::CleanupRequired => "workspace cleanup is required",
             Self::ClockFailure => "the monotonic session clock failed",
             Self::StaleCapability => "the capability is stale or mismatched",

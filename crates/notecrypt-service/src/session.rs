@@ -10,7 +10,7 @@ use notecrypt_crypto::{Argon2idParameters, ValidatedArgon2idParameters};
 use notecrypt_store::{
     CompromiseRekeySource, ReplicationLimits, StoreError, UnlockedVault, VaultStore,
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{RecoverySecretInput, ServiceError, WorkspaceProvider};
 
@@ -399,6 +399,103 @@ impl LocalEntryList {
     }
 }
 
+struct LocalAuthenticatedEntry {
+    id: LocalEntryId,
+    parent: LocalEntryId,
+    name: Zeroizing<String>,
+    kind: LocalEntryKind,
+    revision: Option<RevisionId>,
+}
+
+/// One bounded, generation-coherent authenticated observation of the local vault.
+pub struct LocalAuthenticatedView {
+    snapshot: SnapshotId,
+    root: LocalEntryId,
+    entries: Vec<LocalAuthenticatedEntry>,
+}
+
+/// Fixed-size coherent status projection for one authenticated generation.
+pub struct LocalAuthenticatedStatus {
+    snapshot: SnapshotId,
+    root: LocalEntryId,
+    entry_count: usize,
+}
+
+impl LocalAuthenticatedStatus {
+    pub fn snapshot_id(&self) -> SnapshotId {
+        self.snapshot
+    }
+
+    pub fn root_entry_id(&self) -> LocalEntryId {
+        self.root
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+}
+
+impl LocalAuthenticatedView {
+    fn from_store(
+        view: notecrypt_store::RepositoryAuthenticatedView,
+    ) -> Result<Self, RepositoryPortError> {
+        let snapshot = view.snapshot_id();
+        let root = LocalEntryId(view.root_entry_id());
+        let store_entries = view.into_entries();
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(store_entries.len())
+            .map_err(|_| RepositoryPortError::AllocationFailed)?;
+        for entry in store_entries {
+            let (id, parent, name, kind, revision) = entry.into_parts();
+            entries.push(LocalAuthenticatedEntry {
+                id: LocalEntryId(id),
+                parent: LocalEntryId(parent),
+                name: Zeroizing::new(name),
+                kind: match kind {
+                    notecrypt_store::RepositoryEntryKind::File => LocalEntryKind::File,
+                    notecrypt_store::RepositoryEntryKind::Directory => LocalEntryKind::Directory,
+                    notecrypt_store::RepositoryEntryKind::Tombstone => LocalEntryKind::Tombstone,
+                },
+                revision,
+            });
+        }
+        Ok(Self {
+            snapshot,
+            root,
+            entries,
+        })
+    }
+
+    pub fn snapshot_id(&self) -> SnapshotId {
+        self.snapshot
+    }
+
+    pub fn root_entry_id(&self) -> LocalEntryId {
+        self.root
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn into_entry_summaries(self) -> Result<crate::EntrySummaries, ServiceError> {
+        crate::EntrySummaries::try_from_iter(self.entries.into_iter().map(|entry| {
+            crate::EntrySummary::from_authenticated_parts(
+                *entry.id.as_bytes(),
+                *entry.parent.as_bytes(),
+                entry.name,
+                match entry.kind {
+                    LocalEntryKind::File => crate::EntryKind::File,
+                    LocalEntryKind::Directory => crate::EntryKind::Directory,
+                    LocalEntryKind::Tombstone => crate::EntryKind::Tombstone,
+                },
+                entry.revision.map(|revision| *revision.as_bytes()),
+            )
+        }))
+    }
+}
+
 pub struct LocalMutation(notecrypt_store::RepositoryMutation);
 
 fn validated_entry_name(value: &str) -> Result<String, RepositoryPortError> {
@@ -583,6 +680,56 @@ pub trait LocalVaultLease: Send {
     fn list_entries(&mut self) -> Result<LocalEntryList, RepositoryPortError>;
     fn root_entry_id(&mut self) -> Result<LocalEntryId, RepositoryPortError>;
     fn current_snapshot_id(&mut self) -> Result<SnapshotId, RepositoryPortError>;
+    fn authenticated_view(
+        &mut self,
+        max_entries: usize,
+    ) -> Result<LocalAuthenticatedView, RepositoryPortError> {
+        let root = self.root_entry_id()?;
+        let snapshot = self.current_snapshot_id()?;
+        let list = self.list_entries()?;
+        if list.len() > max_entries {
+            return Err(RepositoryPortError::CapacityExceeded);
+        }
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(list.len())
+            .map_err(|_| RepositoryPortError::AllocationFailed)?;
+        for entry in list.0 {
+            let (id, parent, name, kind, revision) = entry.into_parts();
+            entries.push(LocalAuthenticatedEntry {
+                id: LocalEntryId(id),
+                parent: LocalEntryId(parent),
+                name: Zeroizing::new(name),
+                kind: match kind {
+                    notecrypt_store::RepositoryEntryKind::File => LocalEntryKind::File,
+                    notecrypt_store::RepositoryEntryKind::Directory => LocalEntryKind::Directory,
+                    notecrypt_store::RepositoryEntryKind::Tombstone => LocalEntryKind::Tombstone,
+                },
+                revision,
+            });
+        }
+        Ok(LocalAuthenticatedView {
+            snapshot,
+            root,
+            entries,
+        })
+    }
+    fn authenticated_status(
+        &mut self,
+        max_entries: usize,
+    ) -> Result<LocalAuthenticatedStatus, RepositoryPortError> {
+        let root = self.root_entry_id()?;
+        let snapshot = self.current_snapshot_id()?;
+        let entries = self.list_entries()?;
+        if entries.len() > max_entries {
+            return Err(RepositoryPortError::CapacityExceeded);
+        }
+        Ok(LocalAuthenticatedStatus {
+            snapshot,
+            root,
+            entry_count: entries.len(),
+        })
+    }
     fn apply(
         &mut self,
         mutation: LocalMutation,
@@ -769,11 +916,35 @@ pub struct OfflineGuessingRiskAcknowledgement {
     version: u8,
 }
 
-impl OfflineGuessingRiskAcknowledgement {
-    pub const fn v1() -> Self {
-        Self { version: 1 }
+/// Versioned safe disclosure that must be consumed to accept custom-secret risk.
+pub struct OfflineGuessingRiskDisclosure {
+    version: u8,
+}
+
+impl OfflineGuessingRiskDisclosure {
+    pub fn try_for_policy(version: u16) -> Result<Self, RepositoryPortError> {
+        if version != 1 {
+            return Err(RepositoryPortError::InvalidInput);
+        }
+        Ok(Self { version: 1 })
     }
 
+    pub const fn warning(&self) -> &'static str {
+        notecrypt_crypto::OFFLINE_VERIFIER_DISCLOSURE
+    }
+
+    pub const fn policy_version(&self) -> u16 {
+        self.version as u16
+    }
+
+    pub const fn accept(self) -> OfflineGuessingRiskAcknowledgement {
+        OfflineGuessingRiskAcknowledgement {
+            version: self.version,
+        }
+    }
+}
+
+impl OfflineGuessingRiskAcknowledgement {
     pub const fn version(&self) -> u8 {
         self.version
     }
@@ -1120,19 +1291,57 @@ pub trait VaultRepository: Send + Sync + 'static {
     ) -> Result<PreparedRecoveryInitialization, RepositoryPortError>;
 }
 
+/// Service-owned Argon2id profile without exposing the crypto crate.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryKdfProfileV1 {
+    memory_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+}
+
+impl RecoveryKdfProfileV1 {
+    pub fn try_new(
+        memory_kib: u32,
+        iterations: u32,
+        parallelism: u32,
+    ) -> Result<Self, RepositoryPortError> {
+        let parameters = Argon2idParameters {
+            memory_kib,
+            iterations,
+            parallelism,
+        };
+        ValidatedArgon2idParameters::try_from(parameters)
+            .map_err(|_| RepositoryPortError::InvalidInput)?;
+        Ok(Self {
+            memory_kib,
+            iterations,
+            parallelism,
+        })
+    }
+
+    fn validated(self) -> Result<ValidatedArgon2idParameters, RepositoryPortError> {
+        ValidatedArgon2idParameters::try_from(Argon2idParameters {
+            memory_kib: self.memory_kib,
+            iterations: self.iterations,
+            parallelism: self.parallelism,
+        })
+        .map_err(|_| RepositoryPortError::InvalidInput)
+    }
+}
+
 /// Validated owned target selected by a trusted composition adapter.
-pub struct ValidatedVaultTargetConfig {
+pub struct LocalVaultConfig {
     repository_root: std::path::PathBuf,
     local_state_root: std::path::PathBuf,
-    parameters: Argon2idParameters,
+    profile: RecoveryKdfProfileV1,
     device_label: String,
 }
 
-impl ValidatedVaultTargetConfig {
+impl LocalVaultConfig {
     pub fn try_new(
         repository_root: std::path::PathBuf,
         local_state_root: std::path::PathBuf,
-        parameters: Argon2idParameters,
+        profile: RecoveryKdfProfileV1,
         device_label: String,
     ) -> Result<Self, RepositoryPortError> {
         if !crate::ports::valid_absolute_path(&repository_root)
@@ -1141,7 +1350,6 @@ impl ValidatedVaultTargetConfig {
             || device_label.is_empty()
             || device_label.len() > 256
             || device_label.as_bytes().contains(&0)
-            || ValidatedArgon2idParameters::try_from(parameters).is_err()
         {
             return Err(RepositoryPortError::InvalidInput);
         }
@@ -1156,24 +1364,23 @@ impl ValidatedVaultTargetConfig {
         Ok(Self {
             repository_root,
             local_state_root,
-            parameters,
+            profile,
             device_label,
         })
     }
 
     fn validated_parameters(&self) -> Result<ValidatedArgon2idParameters, RepositoryPortError> {
-        ValidatedArgon2idParameters::try_from(self.parameters)
-            .map_err(|_| RepositoryPortError::InvalidInput)
+        self.profile.validated()
     }
 }
 
 /// Resolves an opaque compromise target without putting paths in UI requests.
 pub trait CompromiseTargetResolver: Send + Sync + 'static {
-    fn resolve(&self, target: [u8; 16]) -> Result<ValidatedVaultTargetConfig, RepositoryPortError>;
+    fn resolve(&self, target: [u8; 16]) -> Result<LocalVaultConfig, RepositoryPortError>;
 }
 
 enum StoreRepositoryState {
-    Vacant(Arc<ValidatedVaultTargetConfig>),
+    Vacant(Arc<LocalVaultConfig>),
     Existing(Arc<VaultStore>),
 }
 
@@ -1185,7 +1392,7 @@ pub struct StoreVaultRepository {
 }
 
 impl StoreVaultRepository {
-    pub fn existing(
+    pub(crate) fn existing(
         store: Arc<VaultStore>,
         workspace: Arc<dyn WorkspaceProvider>,
         targets: Arc<dyn CompromiseTargetResolver>,
@@ -1197,8 +1404,18 @@ impl StoreVaultRepository {
         }
     }
 
+    pub fn open(
+        target: LocalVaultConfig,
+        workspace: Arc<dyn WorkspaceProvider>,
+        targets: Arc<dyn CompromiseTargetResolver>,
+    ) -> Result<Self, RepositoryPortError> {
+        let store = VaultStore::open(&target.repository_root, &target.local_state_root)
+            .map_err(map_store_error)?;
+        Ok(Self::existing(store, workspace, targets))
+    }
+
     pub fn vacant(
-        target: ValidatedVaultTargetConfig,
+        target: LocalVaultConfig,
         workspace: Arc<dyn WorkspaceProvider>,
         targets: Arc<dyn CompromiseTargetResolver>,
     ) -> Self {
@@ -1261,10 +1478,12 @@ impl VaultRepository for StoreVaultRepository {
             StoreRepositoryState::Existing(_) => return Err(RepositoryPortError::InvalidInput),
         };
         let cancellation = Arc::new(AtomicBool::new(false));
+        let custom = request.policy() == RecoverySecretPolicy::CustomV1;
         let action = Box::new(StorePendingRecoveryAction {
             state: Arc::clone(&self.state),
             target,
             cancellation,
+            custom,
         });
         match request.policy() {
             RecoverySecretPolicy::Generated => Ok(PreparedRecoveryInitialization::new(
@@ -1287,7 +1506,7 @@ impl VaultRepository for StoreVaultRepository {
 fn generate_recovery_input() -> Result<RecoverySecretInput, RepositoryPortError> {
     let phrase = notecrypt_crypto::generate_recovery_phrase(&mut notecrypt_crypto::OsRandom)
         .map_err(|_| RepositoryPortError::EntropyUnavailable)?;
-    let mut bytes = Vec::new();
+    let mut bytes = Zeroizing::new(Vec::new());
     phrase.present_once(|value| {
         if crate::ports::allocation_failure_injected_for_test() {
             return Err(RepositoryPortError::AllocationFailed);
@@ -1298,13 +1517,14 @@ fn generate_recovery_input() -> Result<RecoverySecretInput, RepositoryPortError>
         bytes.extend_from_slice(value.as_bytes());
         Ok(())
     })?;
-    RecoverySecretInput::from_protected_bytes(bytes).map_err(map_host_repository_error)
+    RecoverySecretInput::from_zeroizing_bytes(bytes).map_err(map_host_repository_error)
 }
 
 struct StorePendingRecoveryAction {
     state: Arc<Mutex<StoreRepositoryState>>,
-    target: Arc<ValidatedVaultTargetConfig>,
+    target: Arc<LocalVaultConfig>,
     cancellation: Arc<AtomicBool>,
+    custom: bool,
 }
 
 impl PendingRecoveryAction for StorePendingRecoveryAction {
@@ -1320,10 +1540,20 @@ impl PendingRecoveryAction for StorePendingRecoveryAction {
         if cancel.is_cancelled() || self.cancellation.load(Ordering::Acquire) {
             return Err(RepositoryPortError::Cancelled);
         }
+        let passphrase = confirmation.into_crypto_passphrase();
+        let passphrase = if self.custom {
+            notecrypt_crypto::validate_custom_passphrase(
+                passphrase,
+                notecrypt_crypto::CustomPassphrasePolicy::V1,
+            )
+            .map_err(|_| RepositoryPortError::InvalidInput)?
+        } else {
+            passphrase
+        };
         let store = VaultStore::initialize(
             &self.target.repository_root,
             &self.target.local_state_root,
-            confirmation.into_crypto_passphrase(),
+            passphrase,
             self.target.validated_parameters()?,
             &self.target.device_label,
             cancel.as_atomic(),
@@ -1347,7 +1577,7 @@ impl PendingRecoveryAction for StorePendingRecoveryAction {
 struct StorePendingCompromiseAction {
     source_store: Arc<VaultStore>,
     source: Option<Box<dyn CompromiseRekeySource>>,
-    target: ValidatedVaultTargetConfig,
+    target: LocalVaultConfig,
     cancellation: Arc<AtomicBool>,
 }
 
@@ -1632,6 +1862,48 @@ impl LocalVaultLease for StoreLocalVaultLease {
             return Err(RepositoryPortError::Cancelled);
         }
         Ok(result)
+    }
+
+    fn authenticated_view(
+        &mut self,
+        max_entries: usize,
+    ) -> Result<LocalAuthenticatedView, RepositoryPortError> {
+        if self.cancel.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Cancelled);
+        }
+        let view = self
+            .lease
+            .as_mut()
+            .ok_or(RepositoryPortError::Locked)?
+            .authenticated_view(max_entries, &self.cancel)
+            .map_err(map_store_error)?;
+        if self.cancel.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Cancelled);
+        }
+        LocalAuthenticatedView::from_store(view)
+    }
+
+    fn authenticated_status(
+        &mut self,
+        max_entries: usize,
+    ) -> Result<LocalAuthenticatedStatus, RepositoryPortError> {
+        if self.cancel.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Cancelled);
+        }
+        let status = self
+            .lease
+            .as_mut()
+            .ok_or(RepositoryPortError::Locked)?
+            .authenticated_status(max_entries, &self.cancel)
+            .map_err(map_store_error)?;
+        if self.cancel.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Cancelled);
+        }
+        Ok(LocalAuthenticatedStatus {
+            snapshot: status.snapshot_id(),
+            root: LocalEntryId(status.root_entry_id()),
+            entry_count: status.entry_count(),
+        })
     }
 
     fn apply(
@@ -2246,6 +2518,7 @@ fn map_store_error(error: StoreError) -> RepositoryPortError {
         StoreError::FilesystemObjectRejected | StoreError::ImmutableObjectConflict => {
             RepositoryPortError::InvalidInput
         }
+        StoreError::InvalidInput => RepositoryPortError::InvalidInput,
         _ => RepositoryPortError::PlatformFailure,
     }
 }
@@ -2678,6 +2951,13 @@ impl SessionManager {
 
     pub(crate) fn repository(&self) -> &Arc<dyn VaultRepository> {
         &self.repository
+    }
+
+    pub(crate) fn current_vault_id(&self) -> Option<VaultId> {
+        *self
+            .vault_id
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     pub(crate) fn begin_compromise_rekey(
@@ -3759,14 +4039,13 @@ pub(crate) fn map_repository_error(error: RepositoryPortError) -> ServiceError {
             ServiceError::CleanupRequired
         }
         RepositoryPortError::TimedOut => ServiceError::TimedOut,
-        RepositoryPortError::IntegrityFailed
-        | RepositoryPortError::NotFound
-        | RepositoryPortError::InvalidInput => ServiceError::ExecutorFailed,
+        RepositoryPortError::IntegrityFailed => ServiceError::IntegrityFailed,
+        RepositoryPortError::InvalidInput => ServiceError::InvalidInput,
+        RepositoryPortError::NotFound => ServiceError::Unavailable,
         RepositoryPortError::EntropyUnavailable => ServiceError::EntropyUnavailable,
         RepositoryPortError::IdentifierExhausted => ServiceError::IdentifierExhausted,
-        RepositoryPortError::Unavailable | RepositoryPortError::PlatformFailure => {
-            ServiceError::ExecutorFailed
-        }
+        RepositoryPortError::Unavailable => ServiceError::Unavailable,
+        RepositoryPortError::PlatformFailure => ServiceError::ExecutorFailed,
     }
 }
 
@@ -4157,14 +4436,11 @@ mod production_transition_tests {
 
     struct OneTargetResolver {
         id: [u8; 16],
-        target: Mutex<Option<ValidatedVaultTargetConfig>>,
+        target: Mutex<Option<LocalVaultConfig>>,
     }
 
     impl CompromiseTargetResolver for OneTargetResolver {
-        fn resolve(
-            &self,
-            target: [u8; 16],
-        ) -> Result<ValidatedVaultTargetConfig, RepositoryPortError> {
+        fn resolve(&self, target: [u8; 16]) -> Result<LocalVaultConfig, RepositoryPortError> {
             if target != self.id {
                 return Err(RepositoryPortError::NotFound);
             }
@@ -4176,16 +4452,12 @@ mod production_transition_tests {
         }
     }
 
-    fn parameters() -> Argon2idParameters {
-        Argon2idParameters {
-            memory_kib: 65_536,
-            iterations: 3,
-            parallelism: 1,
-        }
+    fn parameters() -> RecoveryKdfProfileV1 {
+        RecoveryKdfProfileV1::try_new(65_536, 3, 1).unwrap()
     }
 
-    fn target(repository: &TempDir, local: &TempDir, label: &str) -> ValidatedVaultTargetConfig {
-        ValidatedVaultTargetConfig::try_new(
+    fn target(repository: &TempDir, local: &TempDir, label: &str) -> LocalVaultConfig {
+        LocalVaultConfig::try_new(
             repository.path().canonicalize().unwrap(),
             local.path().canonicalize().unwrap(),
             parameters(),
@@ -4267,7 +4539,9 @@ mod production_transition_tests {
             .begin_recovery_initialization(
                 BeginRecoveryInitialization::custom_v1(
                     secret(b"alpha beta gamma delta epsilon"),
-                    OfflineGuessingRiskAcknowledgement::v1(),
+                    OfflineGuessingRiskDisclosure::try_for_policy(1)
+                        .unwrap()
+                        .accept(),
                 ),
                 &cancellation,
             )
@@ -4288,7 +4562,9 @@ mod production_transition_tests {
             .begin_compromise_rekey(
                 BeginCompromiseRekey::try_custom_v1(
                     target_id,
-                    OfflineGuessingRiskAcknowledgement::v1(),
+                    OfflineGuessingRiskDisclosure::try_for_policy(1)
+                        .unwrap()
+                        .accept(),
                 )
                 .unwrap(),
                 &cancellation,
@@ -4338,7 +4614,9 @@ mod production_transition_tests {
             .begin_recovery_initialization(
                 BeginRecoveryInitialization::custom_v1(
                     secret(b"alpha beta gamma delta epsilon"),
-                    OfflineGuessingRiskAcknowledgement::v1(),
+                    OfflineGuessingRiskDisclosure::try_for_policy(1)
+                        .unwrap()
+                        .accept(),
                 ),
                 cancellation.as_ref(),
             )
@@ -4384,7 +4662,9 @@ mod production_transition_tests {
             .begin_recovery_initialization(
                 BeginRecoveryInitialization::custom_v1(
                     secret(b"alpha beta gamma delta epsilon"),
-                    OfflineGuessingRiskAcknowledgement::v1(),
+                    OfflineGuessingRiskDisclosure::try_for_policy(1)
+                        .unwrap()
+                        .accept(),
                 ),
                 &setup_cancel,
             )
@@ -4400,7 +4680,9 @@ mod production_transition_tests {
             .begin_compromise_rekey(
                 BeginCompromiseRekey::try_custom_v1(
                     target_id,
-                    OfflineGuessingRiskAcknowledgement::v1(),
+                    OfflineGuessingRiskDisclosure::try_for_policy(1)
+                        .unwrap()
+                        .accept(),
                 )
                 .unwrap(),
                 &setup_cancel,
@@ -4607,13 +4889,9 @@ mod production_transition_tests {
         let mut label = String::with_capacity(1_000_000);
         label.push_str("device");
 
-        let target = ValidatedVaultTargetConfig::try_new(
-            repository_root,
-            local_state_root,
-            parameters(),
-            label,
-        )
-        .unwrap();
+        let target =
+            LocalVaultConfig::try_new(repository_root, local_state_root, parameters(), label)
+                .unwrap();
         assert!(target.repository_root.capacity() <= crate::MAX_NATIVE_PATH_BYTES);
         assert!(target.local_state_root.capacity() <= crate::MAX_NATIVE_PATH_BYTES);
         assert!(target.device_label.capacity() <= 256);
@@ -4660,7 +4938,7 @@ mod production_transition_tests {
             let local = TempDir::new().unwrap();
             crate::ports::inject_allocation_failure_after_for_test(successful_reservations);
             assert!(matches!(
-                ValidatedVaultTargetConfig::try_new(
+                LocalVaultConfig::try_new(
                     repository.path().canonicalize().unwrap(),
                     local.path().canonicalize().unwrap(),
                     parameters(),
@@ -4695,10 +4973,8 @@ mod production_transition_tests {
             Err(RepositoryPortError::AllocationFailed)
         ));
         crate::ports::inject_allocation_failure_after_for_test(1);
-        assert!(matches!(
-            generate_recovery_input(),
-            Err(RepositoryPortError::AllocationFailed)
-        ));
+        assert!(generate_recovery_input().is_ok());
+        assert!(crate::ports::allocation_failure_injected_for_test());
 
         assert_eq!(
             map_core_repository_error(notecrypt_core::CoreError::AllocationFailed),

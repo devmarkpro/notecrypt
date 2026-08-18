@@ -537,6 +537,10 @@ impl VaultRepository for FakeRepository {
         _secret: RecoverySecretInput,
         cancel: &notecrypt_service::RepositoryCancellation,
     ) -> Result<Box<dyn UnlockedVaultCapability>, RepositoryPortError> {
+        assert_eq!(
+            thread::current().name(),
+            Some("notecrypt-service-security-worker")
+        );
         if cancel.is_cancelled() {
             return Err(RepositoryPortError::Cancelled);
         }
@@ -967,6 +971,18 @@ fn blocked_startup_cleanup_exposes_no_unlock_or_operation_capability() {
     let unlock = thread::spawn(move || unlock_service.unlock_with_recovery(secret()));
     cleanup_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
     assert_eq!(service.snapshot().session_state(), SessionState::Locked);
+    assert_eq!(
+        service.unlock_with_recovery(secret()),
+        Err(ServiceError::Busy)
+    );
+    assert!(matches!(
+        service.submit(Command::Backup(notecrypt_service::BackupVault)),
+        Err(ServiceError::Locked)
+    ));
+    assert!(matches!(
+        service.submit(Command::Status(notecrypt_service::VaultStatusRequest)),
+        Err(ServiceError::Locked)
+    ));
     assert!(matches!(
         service.submit(Command::List(notecrypt_service::ListEntries)),
         Err(ServiceError::Locked)
@@ -1009,6 +1025,14 @@ fn lock_revokes_provisional_root_while_authenticated_reconciliation_is_blocked()
         assert!(std::time::Instant::now() < deadline);
         thread::yield_now();
     }
+    assert!(matches!(
+        service.submit(Command::Backup(notecrypt_service::BackupVault)),
+        Err(ServiceError::Locked)
+    ));
+    assert!(matches!(
+        service.submit(Command::Status(notecrypt_service::VaultStatusRequest)),
+        Err(ServiceError::Locked)
+    ));
     assert!(matches!(
         service.submit(Command::List(notecrypt_service::ListEntries)),
         Err(ServiceError::Locked)
@@ -1166,7 +1190,7 @@ fn warnings_are_emitted_once_at_each_boundary_even_after_a_large_clock_jump() {
 fn mutating_admission_resets_inactivity_but_listing_does_not() {
     for (command, should_remain_unlocked) in [
         (Command::CreateFile(notecrypt_service::CreateFile), true),
-        (Command::List(notecrypt_service::ListEntries), false),
+        (Command::Backup(notecrypt_service::BackupVault), false),
     ] {
         let gate = Arc::new(TestGate::default());
         let (entered_tx, entered_rx) = mpsc::channel();
@@ -1474,7 +1498,7 @@ fn clock_failure_fails_closed_before_admitting_or_observing_more_work() {
     clock.fail();
     assert_eq!(activity.record(), Err(ServiceError::ClockFailure));
     assert!(matches!(
-        service.submit(Command::List(notecrypt_service::ListEntries)),
+        service.submit(Command::Backup(notecrypt_service::BackupVault)),
         Err(ServiceError::ClockFailure)
     ));
     wait_for_state(&service, SessionState::Locked);

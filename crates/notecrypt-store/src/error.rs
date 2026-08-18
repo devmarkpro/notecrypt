@@ -28,6 +28,8 @@ pub enum StoreError {
     TimedOut,
     #[error("a one-time capability was stale, mismatched, or already consumed")]
     InvalidCapability,
+    #[error("the caller supplied an invalid bounded input")]
+    InvalidInput,
     #[error("another process owns the vault mutation lock")]
     Busy,
     #[error("the filesystem mutation took effect but still requires directory synchronization")]

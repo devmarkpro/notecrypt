@@ -284,6 +284,10 @@ impl PendingRecoveryAction for RecoveryAction {
         _confirmation: RecoverySecretInput,
         cancel: &notecrypt_service::RepositoryCancellation,
     ) -> Result<VaultSummary, RepositoryPortError> {
+        assert_eq!(
+            thread::current().name(),
+            Some("notecrypt-service-security-worker")
+        );
         if let Some(probe) = &self.probe {
             probe.entered.set();
             while !cancel.is_cancelled() {
@@ -384,7 +388,9 @@ impl OperationExecutor for PanicFreshnessExecutor {
         context.await_freshness_acknowledgement(Box::new(PanicFreshnessViewAction(Arc::clone(
             &self.0,
         ))))?;
-        Ok(OperationResult::SecurityTransitionCompleted)
+        Ok(OperationResult::Entries(
+            notecrypt_service::EntrySummaries::empty(),
+        ))
     }
 }
 
@@ -398,6 +404,10 @@ impl VaultRepository for FakeRepository {
         _secret: RecoverySecretInput,
         cancel: &notecrypt_service::RepositoryCancellation,
     ) -> Result<Box<dyn UnlockedVaultCapability>, RepositoryPortError> {
+        assert_eq!(
+            thread::current().name(),
+            Some("notecrypt-service-security-worker")
+        );
         if cancel.is_cancelled() {
             return Err(RepositoryPortError::Cancelled);
         }
@@ -409,6 +419,10 @@ impl VaultRepository for FakeRepository {
         request: BeginRecoveryInitialization,
         cancel: &notecrypt_service::RepositoryCancellation,
     ) -> Result<PreparedRecoveryInitialization, RepositoryPortError> {
+        assert_eq!(
+            thread::current().name(),
+            Some("notecrypt-service-security-worker")
+        );
         if cancel.is_cancelled() {
             return Err(RepositoryPortError::Cancelled);
         }
@@ -633,7 +647,9 @@ fn custom_recovery_uses_two_matching_entries_without_a_presentation() {
     let (pending, presentation) = service
         .begin_recovery_initialization(BeginRecoveryInitialization::custom_v1(
             first,
-            notecrypt_service::OfflineGuessingRiskAcknowledgement::v1(),
+            notecrypt_service::OfflineGuessingRiskDisclosure::try_for_policy(1)
+                .unwrap()
+                .accept(),
         ))
         .unwrap();
     assert!(presentation.is_none());
@@ -737,10 +753,7 @@ fn compromise_rekey_confirmation_and_cancel_have_linear_consumption() {
             CompromiseRekeyConfirmation::generated(present(presentation.unwrap())),
         )
         .unwrap();
-    assert_eq!(
-        operation.wait_result(Duration::from_secs(1)).unwrap(),
-        OperationResult::SecurityTransitionCompleted
-    );
+    operation.wait_result(Duration::from_secs(1)).unwrap();
 
     let (mismatch, presentation) = service
         .begin_compromise_rekey(BeginCompromiseRekey::try_generated([3; 16]).unwrap())
@@ -777,7 +790,9 @@ fn custom_compromise_is_secret_free_until_consuming_confirmation() {
     let service = unlocked_service_with(Arc::clone(&counts));
     let request = BeginCompromiseRekey::try_custom_v1(
         [5; 16],
-        notecrypt_service::OfflineGuessingRiskAcknowledgement::v1(),
+        notecrypt_service::OfflineGuessingRiskDisclosure::try_for_policy(1)
+            .unwrap()
+            .accept(),
     )
     .unwrap();
     let (pending, presentation) = service.begin_compromise_rekey(request).unwrap();
@@ -791,10 +806,7 @@ fn custom_compromise_is_secret_free_until_consuming_confirmation() {
             ),
         )
         .unwrap();
-    assert_eq!(
-        operation.wait_result(Duration::from_secs(1)).unwrap(),
-        OperationResult::SecurityTransitionCompleted
-    );
+    operation.wait_result(Duration::from_secs(1)).unwrap();
     assert_eq!(counts.rekey_confirm.load(Ordering::Acquire), 1);
     assert!(matches!(
         BeginCompromiseRekey::try_generated([0; 16]),
@@ -827,7 +839,9 @@ fn compromise_confirmation_shape_mismatch_aborts_prepared_action_once() {
         .begin_compromise_rekey(
             BeginCompromiseRekey::try_custom_v1(
                 [14; 16],
-                notecrypt_service::OfflineGuessingRiskAcknowledgement::v1(),
+                notecrypt_service::OfflineGuessingRiskDisclosure::try_for_policy(1)
+                    .unwrap()
+                    .accept(),
             )
             .unwrap(),
         )
@@ -996,7 +1010,7 @@ fn queued_compromise_is_aborted_when_shutdown_discards_the_worker_item() {
     );
     unlock_until_ready(&service);
     let blocker = service
-        .submit(Command::List(notecrypt_service::ListEntries))
+        .submit(Command::Backup(notecrypt_service::BackupVault))
         .unwrap();
     entered.wait();
     let (pending, presentation) = service

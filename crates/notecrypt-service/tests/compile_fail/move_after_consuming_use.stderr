@@ -1,67 +1,67 @@
 error[E0382]: use of moved value: `value`
-  --> tests/compile_fail/move_after_consuming_use.rs:19:10
+  --> tests/compile_fail/move_after_consuming_use.rs:21:10
    |
 16 | fn recovery_input(value: RecoverySecretInput) {
    |                   ----- move occurs because `value` has type `RecoverySecretInput`, which does not implement the `Copy` trait
-17 |     let _request =
-18 |         BeginRecoveryInitialization::custom_v1(value, OfflineGuessingRiskAcknowledgement::v1());
-   |                                                ----- value moved here
-19 |     drop(value);
+...
+20 |     let _request = BeginRecoveryInitialization::custom_v1(value, acceptance);
+   |                                                           ----- value moved here
+21 |     drop(value);
    |          ^^^^^ value used here after move
 
 error[E0382]: use of moved value: `value`
-  --> tests/compile_fail/move_after_consuming_use.rs:24:10
+  --> tests/compile_fail/move_after_consuming_use.rs:26:10
    |
-22 | fn recovery_presentation(value: RecoverySecretPresentation) {
+24 | fn recovery_presentation(value: RecoverySecretPresentation) {
    |                          ----- move occurs because `value` has type `RecoverySecretPresentation`, which does not implement the `Copy` trait
-23 |     value.present_once(&mut Presenter).unwrap();
+25 |     value.present_once(&mut Presenter).unwrap();
    |           ---------------------------- `value` moved due to this method call
-24 |     drop(value);
+26 |     drop(value);
    |          ^^^^^ value used here after move
    |
 note: `RecoverySecretPresentation::present_once` takes ownership of the receiver `self`, which moves `value`
   --> src/ports.rs
    |
-   |         mut self,
-   |             ^^^^
+   |         self,
+   |         ^^^^
 
 error[E0382]: use of moved value: `value`
-  --> tests/compile_fail/move_after_consuming_use.rs:30:10
+  --> tests/compile_fail/move_after_consuming_use.rs:32:10
    |
-27 | fn device_secret(value: DeviceUnlockSecret) {
+29 | fn device_secret(value: DeviceUnlockSecret) {
    |                  ----- move occurs because `value` has type `DeviceUnlockSecret`, which does not implement the `Copy` trait
-28 |     let reference = DeviceKeyReference::from_bytes(vec![1]).unwrap();
-29 |     let _enrolled = EnrolledDeviceKey::new(reference, value);
+30 |     let reference = DeviceKeyReference::from_bytes(vec![1]).unwrap();
+31 |     let _enrolled = EnrolledDeviceKey::new(reference, value);
    |                                                       ----- value moved here
-30 |     drop(value);
+32 |     drop(value);
    |          ^^^^^ value used here after move
 
 error[E0382]: use of moved value: `value`
-  --> tests/compile_fail/move_after_consuming_use.rs:35:44
+  --> tests/compile_fail/move_after_consuming_use.rs:37:44
    |
-33 | fn recovery_pending(service: &ServiceHandle, value: PendingRecoveryInitialization) {
+35 | fn recovery_pending(service: &ServiceHandle, value: PendingRecoveryInitialization) {
    |                                              ----- move occurs because `value` has type `PendingRecoveryInitialization`, which does not implement the `Copy` trait
-34 |     service.cancel_recovery_initialization(value).unwrap();
+36 |     service.cancel_recovery_initialization(value).unwrap();
    |                                            ----- value moved here
-35 |     service.cancel_recovery_initialization(value).unwrap();
+37 |     service.cancel_recovery_initialization(value).unwrap();
    |                                            ^^^^^ value used here after move
 
 error[E0382]: use of moved value: `value`
-  --> tests/compile_fail/move_after_consuming_use.rs:40:37
+  --> tests/compile_fail/move_after_consuming_use.rs:42:37
    |
-38 | fn compromise_pending(service: &ServiceHandle, value: PendingCompromiseRekey) {
+40 | fn compromise_pending(service: &ServiceHandle, value: PendingCompromiseRekey) {
    |                                                ----- move occurs because `value` has type `PendingCompromiseRekey`, which does not implement the `Copy` trait
-39 |     service.cancel_compromise_rekey(value).unwrap();
+41 |     service.cancel_compromise_rekey(value).unwrap();
    |                                     ----- value moved here
-40 |     service.cancel_compromise_rekey(value).unwrap();
+42 |     service.cancel_compromise_rekey(value).unwrap();
    |                                     ^^^^^ value used here after move
 
 error[E0382]: use of moved value: `value`
-  --> tests/compile_fail/move_after_consuming_use.rs:45:46
+  --> tests/compile_fail/move_after_consuming_use.rs:47:46
    |
-43 | fn freshness_pending(service: &ServiceHandle, value: PendingFreshnessAcknowledgement) {
+45 | fn freshness_pending(service: &ServiceHandle, value: PendingFreshnessAcknowledgement) {
    |                                               ----- move occurs because `value` has type `PendingFreshnessAcknowledgement`, which does not implement the `Copy` trait
-44 |     service.cancel_freshness_acknowledgement(value).unwrap();
+46 |     service.cancel_freshness_acknowledgement(value).unwrap();
    |                                              ----- value moved here
-45 |     service.cancel_freshness_acknowledgement(value).unwrap();
+47 |     service.cancel_freshness_acknowledgement(value).unwrap();
    |                                              ^^^^^ value used here after move

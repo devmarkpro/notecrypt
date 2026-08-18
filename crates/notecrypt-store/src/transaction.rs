@@ -649,6 +649,7 @@ pub mod test_support {
             &first_keys,
             |id, file| first_keys.verify_tree_file(first_keys.generation(), id, file),
             |head_bytes| verify_reachable_tree(&first_store, &first_keys, head_bytes),
+            None,
         )?;
         drop(first_keys);
         drop(first_store);
@@ -661,6 +662,7 @@ pub mod test_support {
             &second_keys,
             |id, file| second_keys.verify_tree_file(second_keys.generation(), id, file),
             |head_bytes| verify_reachable_tree(&second_store, &second_keys, head_bytes),
+            None,
         )?;
         let transient_entries = std::fs::read_dir(repository_root.join(".notecrypt-txn"))
             .map_err(StoreError::from)?
@@ -1004,6 +1006,7 @@ mod tests {
             &recovered_keys,
             |_, _| Ok(()),
             |_| Ok(()),
+            None,
         )
         .unwrap();
         assert_eq!(

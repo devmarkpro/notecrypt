@@ -821,7 +821,7 @@ impl DeviceUnlockSecret {
 
 /// Recovery credential owner with a no-copy consuming crypto bridge.
 pub struct RecoverySecretInput {
-    value: String,
+    value: Zeroizing<Vec<u8>>,
 }
 
 fn recovery_verifier(key: &[u8; 32], value: &[u8]) -> Zeroizing<[u8; 32]> {
@@ -838,41 +838,54 @@ impl RecoverySecretInput {
             return Err(HostPortError::InvalidInput);
         }
         let retained = try_rehome_bytes(&mut bytes, MAX_RECOVERY_SECRET_BYTES)?;
-        match String::from_utf8(retained) {
-            Ok(value) => Ok(Self { value }),
-            Err(error) => {
-                let mut retained = error.into_bytes();
-                retained.zeroize();
-                Err(HostPortError::InvalidInput)
-            }
+        if std::str::from_utf8(&retained).is_err() {
+            let mut retained = retained;
+            retained.zeroize();
+            return Err(HostPortError::InvalidInput);
         }
+        Ok(Self {
+            value: Zeroizing::new(retained),
+        })
+    }
+
+    pub(crate) fn from_zeroizing_bytes(
+        mut bytes: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, HostPortError> {
+        if bytes.is_empty()
+            || bytes.len() > MAX_RECOVERY_SECRET_BYTES
+            || bytes.contains(&0)
+            || std::str::from_utf8(bytes.as_slice()).is_err()
+        {
+            bytes.zeroize();
+            return Err(HostPortError::InvalidInput);
+        }
+        Ok(Self { value: bytes })
     }
 
     pub(crate) fn into_crypto_passphrase(mut self) -> RecoveryPassphrase {
-        RecoveryPassphrase::new(std::mem::take(&mut self.value))
+        let bytes = std::mem::take(self.value.as_mut());
+        let value = String::from_utf8(bytes)
+            .expect("RecoverySecretInput validates UTF-8 before construction");
+        RecoveryPassphrase::new(value)
     }
 
-    pub(crate) fn into_presentation(
+    pub(crate) fn into_presentation_payload(
         mut self,
-        generation: u64,
         key: &[u8; 32],
-    ) -> Result<(RecoverySecretPresentation, Zeroizing<[u8; 32]>), HostPortError> {
-        let verifier = recovery_verifier(key, self.value.as_bytes());
-        let payload = std::mem::take(&mut self.value);
-        Ok((
-            RecoverySecretPresentation::try_new(generation, payload)?,
-            verifier,
-        ))
+    ) -> (Zeroizing<Vec<u8>>, Zeroizing<[u8; 32]>) {
+        let verifier = recovery_verifier(key, self.value.as_slice());
+        let payload = Zeroizing::new(std::mem::take(self.value.as_mut()));
+        (payload, verifier)
     }
 
     pub(crate) fn verify_and_retain(self, key: &[u8; 32], expected: &[u8; 32]) -> Result<Self, ()> {
-        let actual = recovery_verifier(key, self.value.as_bytes());
+        let actual = recovery_verifier(key, self.value.as_slice());
         let matches = constant_time_eq::constant_time_eq_32(&actual, expected);
         if matches { Ok(self) } else { Err(()) }
     }
 
     pub(crate) fn into_verifier(mut self, key: &[u8; 32]) -> Zeroizing<[u8; 32]> {
-        let verifier = recovery_verifier(key, self.value.as_bytes());
+        let verifier = recovery_verifier(key, self.value.as_slice());
         self.value.zeroize();
         verifier
     }
@@ -886,36 +899,40 @@ impl Drop for RecoverySecretInput {
 
 /// One-time recovery secret presentation owner.
 pub struct RecoverySecretPresentation {
-    payload: String,
+    payload: RecoveryPresentationCell,
 }
 
+pub(crate) type RecoveryPresentationCell = Arc<Mutex<Option<Zeroizing<Vec<u8>>>>>;
+
 impl RecoverySecretPresentation {
-    pub(crate) fn try_new(generation: u64, mut payload: String) -> Result<Self, HostPortError> {
-        if generation == 0
-            || payload.is_empty()
-            || payload.len() > MAX_RECOVERY_SECRET_BYTES
-            || payload.as_bytes().contains(&0)
-        {
-            payload.zeroize();
-            return Err(HostPortError::InvalidInput);
-        }
-        let payload = try_rehome_string(payload, MAX_RECOVERY_SECRET_BYTES)?;
-        Ok(Self { payload })
+    pub(crate) fn from_shared(payload: RecoveryPresentationCell) -> Self {
+        Self { payload }
     }
 
     pub fn present_once(
-        mut self,
+        self,
         presenter: &mut dyn RecoverySecretPresenter,
     ) -> Result<(), HostPortError> {
-        let result = presenter.present(self.payload.as_bytes());
-        self.payload.zeroize();
-        result
+        let payload = self
+            .payload
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or(HostPortError::InvalidInput)?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            presenter.present(payload.as_slice())
+        }))
+        .map_err(|_| HostPortError::PlatformFailure)?
     }
 }
 
 impl Drop for RecoverySecretPresentation {
     fn drop(&mut self) {
-        self.payload.zeroize();
+        let _ = self
+            .payload
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
     }
 }
 
@@ -1115,10 +1132,23 @@ mod capacity_tests {
         let secret = RecoverySecretInput::from_protected_bytes(oversized_bytes(b"secret")).unwrap();
         assert!(secret.value.capacity() <= MAX_RECOVERY_SECRET_BYTES);
 
-        let mut payload = String::with_capacity(1_000_000);
-        payload.push_str("secret");
-        let presentation = RecoverySecretPresentation::try_new(1, payload).unwrap();
-        assert!(presentation.payload.capacity() <= MAX_RECOVERY_SECRET_BYTES);
+        let mut payload = Vec::with_capacity(1_000_000);
+        payload.extend_from_slice(b"secret");
+        let mut source = payload;
+        let payload =
+            Zeroizing::new(try_rehome_bytes(&mut source, MAX_RECOVERY_SECRET_BYTES).unwrap());
+        let cell = Arc::new(Mutex::new(Some(payload)));
+        let presentation = RecoverySecretPresentation::from_shared(cell);
+        assert!(
+            presentation
+                .payload
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .capacity()
+                <= MAX_RECOVERY_SECRET_BYTES
+        );
     }
 
     #[test]

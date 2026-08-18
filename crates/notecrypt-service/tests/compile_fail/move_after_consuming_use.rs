@@ -1,6 +1,6 @@
 use notecrypt_service::{
     BeginRecoveryInitialization, DeviceKeyReference, DeviceUnlockSecret, EnrolledDeviceKey,
-    HostPortError, OfflineGuessingRiskAcknowledgement, PendingCompromiseRekey,
+    HostPortError, OfflineGuessingRiskDisclosure, PendingCompromiseRekey,
     PendingFreshnessAcknowledgement, PendingRecoveryInitialization, RecoverySecretInput,
     RecoverySecretPresentation, RecoverySecretPresenter, ServiceHandle,
 };
@@ -14,8 +14,10 @@ impl RecoverySecretPresenter for Presenter {
 }
 
 fn recovery_input(value: RecoverySecretInput) {
-    let _request =
-        BeginRecoveryInitialization::custom_v1(value, OfflineGuessingRiskAcknowledgement::v1());
+    let acceptance = OfflineGuessingRiskDisclosure::try_for_policy(1)
+        .unwrap()
+        .accept();
+    let _request = BeginRecoveryInitialization::custom_v1(value, acceptance);
     drop(value);
 }
 

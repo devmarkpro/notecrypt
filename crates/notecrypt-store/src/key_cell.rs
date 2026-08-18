@@ -250,11 +250,11 @@ impl KeyCell {
             let mut revisions = Vec::new();
             revisions
                 .try_reserve_exact(tree.entries().len())
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             let mut references = Vec::new();
             references
                 .try_reserve_exact(tree.entries().len())
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             for entry in tree.entries() {
                 match entry {
                     TreeEntry::File { id, locator, .. } => {
@@ -333,11 +333,11 @@ impl KeyCell {
             let mut references = Vec::new();
             references
                 .try_reserve_exact(manifest.chunks().len())
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             let mut chunks = Vec::new();
             chunks
                 .try_reserve_exact(manifest.chunks().len())
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             for (position, chunk) in manifest.chunks().iter().enumerate() {
                 let object_id = authenticated_object_id(*chunk.object_id());
                 references.push(object_id);
@@ -405,11 +405,11 @@ impl KeyCell {
             let mut parents = Vec::new();
             parents
                 .try_reserve_exact(snapshot.parents().len())
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             let mut references = Vec::new();
             references
                 .try_reserve_exact(snapshot.parents().len().saturating_add(1))
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             references.push(tree_object_id);
             for parent in snapshot.parents() {
                 let object_id = authenticated_object_id(*parent.snapshot_object_id());
@@ -916,7 +916,7 @@ impl KeyCell {
                     let mut owned = Vec::new();
                     owned
                         .try_reserve_exact(bytes.len())
-                        .map_err(|_| StoreError::LimitExceeded)?;
+                        .map_err(|_| StoreError::AllocationFailed)?;
                     owned.extend_from_slice(bytes);
                     Ok(Zeroizing::new(owned))
                 })
@@ -1107,7 +1107,7 @@ fn read_file_bounded_exact(
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(capacity)
-        .map_err(|_| StoreError::LimitExceeded)?;
+        .map_err(|_| StoreError::AllocationFailed)?;
     after_preflight(file)?;
     file.seek(SeekFrom::Start(0))?;
     let maximum_with_sentinel = maximum.checked_add(1).ok_or(StoreError::LimitExceeded)?;
