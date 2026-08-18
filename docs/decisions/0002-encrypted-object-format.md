@@ -15,9 +15,21 @@ Those options allow ambiguous encodings, accidental public fields, or invalid co
 
 ## Decision
 
+The format crate owns the canonical typed outer envelope and record-type domain for local records.
+Each consuming component owns the canonical, versioned, bounded schema of its inner local payload.
+Journal records use the distinct frozen local record type value `6`.
+Vault-availability records use the distinct frozen local record type value `7`, and unknown value `8` remains rejected under format version 1.
+
 We will use independently versioned, canonical CBOR schemas with definite fixed-position arrays, checked profile and algorithm identifiers, exact field types, and bounded decode entry points.
 Ordinary AEAD objects, snapshots, authenticated records, and content chunks use distinct public schemas.
 Protected logical identifiers, counts, graph references, sequence values, and plaintext lengths stay inside authenticated ciphertext or MAC payloads.
+Logical revision IDs and immutable manifest object IDs are distinct identities joined by an opaque `RevisionLocator`.
+A file tree entry remains a fixed array of five values whose last value is `[revision_id, manifest_object_id]`.
+A tombstone remains a fixed array of seven values whose last value is either the same locator pair or null.
+Logical snapshot IDs and immutable snapshot object IDs are distinct identities joined by an opaque `SnapshotParentLocator`.
+Snapshot payloads remain fixed arrays of six values and encode each parent as `[snapshot_id, snapshot_object_id]`, sorted lexicographically by the complete pair with duplicate logical or object identities rejected.
+The store authenticates every located object, cross-checks its protected logical identity, and enforces a tree-wide revision-to-object bijection within replication budgets.
+Because no format version 1 vault has been released, this locator correction replaces the draft version 1 schema and its four affected golden fixtures in place rather than adding a dual decoder or version 2.
 Readers reject unsupported identifiers, non-canonical encodings, trailing bytes, invalid lengths, and limit violations before constructing cryptographic or domain types.
 Version 1 is frozen by non-sensitive golden fixtures and their locked hashes.
 

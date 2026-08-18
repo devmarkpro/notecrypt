@@ -1,0 +1,23 @@
+error[E0277]: the trait bound `RevisionLocator: Clone` is not satisfied
+ --> tests/compile_fail/locator_clone.rs:6:15
+  |
+6 |     require::<RevisionLocator>();
+  |               ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RevisionLocator`
+  |
+note: required by a bound in `require`
+ --> tests/compile_fail/locator_clone.rs:3:15
+  |
+3 | fn require<T: Clone>() {}
+  |               ^^^^^ required by this bound in `require`
+
+error[E0277]: the trait bound `SnapshotParentLocator: Clone` is not satisfied
+ --> tests/compile_fail/locator_clone.rs:7:15
+  |
+7 |     require::<SnapshotParentLocator>();
+  |               ^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SnapshotParentLocator`
+  |
+note: required by a bound in `require`
+ --> tests/compile_fail/locator_clone.rs:3:15
+  |
+3 | fn require<T: Clone>() {}
+  |               ^^^^^ required by this bound in `require`

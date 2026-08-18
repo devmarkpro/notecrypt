@@ -1,0 +1,47 @@
+error[E0277]: `VerifiedReachableHead` doesn't implement `std::fmt::Display`
+ --> tests/compile_fail/reachability_display.rs:9:24
+  |
+9 |     requires_display::<VerifiedReachableHead>();
+  |                        ^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `VerifiedReachableHead`
+  |
+note: required by a bound in `requires_display`
+ --> tests/compile_fail/reachability_display.rs:6:24
+  |
+6 | fn requires_display<T: std::fmt::Display>() {}
+  |                        ^^^^^^^^^^^^^^^^^ required by this bound in `requires_display`
+
+error[E0277]: `CommittedReachableHead` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/reachability_display.rs:10:24
+   |
+10 |     requires_display::<CommittedReachableHead>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `CommittedReachableHead`
+   |
+note: required by a bound in `requires_display`
+  --> tests/compile_fail/reachability_display.rs:6:24
+   |
+ 6 | fn requires_display<T: std::fmt::Display>() {}
+   |                        ^^^^^^^^^^^^^^^^^ required by this bound in `requires_display`
+
+error[E0277]: `PendingRemotePublication` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/reachability_display.rs:11:24
+   |
+11 |     requires_display::<PendingRemotePublication>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `PendingRemotePublication`
+   |
+note: required by a bound in `requires_display`
+  --> tests/compile_fail/reachability_display.rs:6:24
+   |
+ 6 | fn requires_display<T: std::fmt::Display>() {}
+   |                        ^^^^^^^^^^^^^^^^^ required by this bound in `requires_display`
+
+error[E0277]: `PendingUnprovableRemote` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/reachability_display.rs:12:24
+   |
+12 |     requires_display::<PendingUnprovableRemote>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `PendingUnprovableRemote`
+   |
+note: required by a bound in `requires_display`
+  --> tests/compile_fail/reachability_display.rs:6:24
+   |
+ 6 | fn requires_display<T: std::fmt::Display>() {}
+   |                        ^^^^^^^^^^^^^^^^^ required by this bound in `requires_display`

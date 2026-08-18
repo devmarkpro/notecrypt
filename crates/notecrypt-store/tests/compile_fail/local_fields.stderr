@@ -1,0 +1,11 @@
+error[E0616]: field `keys` of struct `UnlockedVault` is private
+ --> tests/compile_fail/local_fields.rs:4:19
+  |
+4 |     let _ = value.keys;
+  |                   ^^^^ private field
+
+error[E0616]: field `generation` of struct `UnlockedVaultLease` is private
+ --> tests/compile_fail/local_fields.rs:8:19
+  |
+8 |     let _ = value.generation;
+  |                   ^^^^^^^^^^ private field

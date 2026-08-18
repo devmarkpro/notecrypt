@@ -8,9 +8,9 @@ use notecrypt_crypto::{
 use notecrypt_format::{
     AeadAlgorithmId, AeadObject, AuthenticationAlgorithmId, ChunkDescriptor, CompactChunkKey,
     ContentChunkObject, ContentPayload, CryptoProfileId, DecodeLimits, FormatVersion, LogicalTree,
-    OrdinaryAeadKind, RevisionManifest, SnapshotObject, SnapshotPayload, TreeEntry,
-    encode_aead_object, encode_content_chunk, encode_content_payload, encode_manifest,
-    encode_snapshot_object, encode_snapshot_payload, encode_tree,
+    OrdinaryAeadKind, RevisionLocator, RevisionManifest, SnapshotObject, SnapshotParentLocator,
+    SnapshotPayload, TreeEntry, encode_aead_object, encode_content_chunk, encode_content_payload,
+    encode_manifest, encode_snapshot_object, encode_snapshot_payload, encode_tree,
 };
 
 struct FixedRandom(u8);
@@ -45,7 +45,7 @@ fn every_public_object_hides_graph_counts_lengths_and_sequence() {
                 [0xa2; 16],
                 [0xa1; 16],
                 std::str::from_utf8(tree_name).unwrap(),
-                [0xa3; 32],
+                RevisionLocator::new([0xa3; 32], [0xa4; 32]),
                 &limits,
             )
             .unwrap(),
@@ -84,7 +84,16 @@ fn every_public_object_hides_graph_counts_lengths_and_sequence() {
         .unwrap(),
     )
     .unwrap();
-    assert_absent(&public, &[tree_name, &[0xa1; 16], &[0xa2; 16], &[0xa3; 32]]);
+    assert_absent(
+        &public,
+        &[
+            tree_name,
+            &[0xa1; 16],
+            &[0xa2; 16],
+            &[0xa3; 32],
+            &[0xa4; 32],
+        ],
+    );
 
     let manifest = RevisionManifest::try_new(
         [0xb1; 16],
@@ -132,7 +141,10 @@ fn every_public_object_hides_graph_counts_lengths_and_sequence() {
 
     let snapshot = SnapshotPayload::try_new(
         [0xc1; 32],
-        vec![[0xc2; 32], [0xc3; 32]],
+        vec![
+            SnapshotParentLocator::new([0xc2; 32], [0xc6; 32]),
+            SnapshotParentLocator::new([0xc3; 32], [0xc7; 32]),
+        ],
         [0xc4; 32],
         [0xc5; 16],
         "device-label-canary",
@@ -179,6 +191,8 @@ fn every_public_object_hides_graph_counts_lengths_and_sequence() {
             &[0xc2; 32],
             &[0xc3; 32],
             &[0xc4; 32],
+            &[0xc6; 32],
+            &[0xc7; 32],
             &[0xc5; 16],
             b"device-label-canary",
         ],

@@ -650,7 +650,10 @@ pub(crate) fn encrypt_parts(
 ) -> Result<AeadEnvelopeParts, CryptoError> {
     let mut plaintext = SensitiveBuffer::new(plaintext);
     let mut nonce = [0_u8; 24];
-    random.fill(&mut nonce)?;
+    if let Err(error) = random.fill(&mut nonce) {
+        nonce.zeroize();
+        return Err(error);
+    }
     let aad = canonical_aad(identity, &nonce, plaintext.bytes.len())?;
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let tag = match cipher.encrypt_in_place_detached(

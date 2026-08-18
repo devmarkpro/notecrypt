@@ -182,15 +182,45 @@ A CSPRNG failure is a hard operation failure and no bootstrap, key slot, object,
 
 This crate owns the local encrypted object repository and transaction boundary.
 It stages immutable objects, flushes durable data, publishes authenticated snapshots, atomically advances the trusted local head, maintains a recovery journal, and recovers incomplete transactions.
+The sole platform-specific unsafe boundary is the private `notecrypt-platform-fs` crate, which presents safe handle-relative nofollow and durability capabilities to the otherwise unsafe-forbidden workspace.
+Repository publication staging uses encrypted-only `.notecrypt-txn/<CSPRNG transaction ID>` children on the repository filesystem, while authenticated journal and trusted state remain in the vault-ID-scoped device-local root.
+The repository and local-state roots may be on different volumes and must be distinct, non-nested filesystem identities.
+Immutable publication consumes the exact authenticated descriptor.
+Linux uses the unprivileged exact-descriptor `/proc/self/fd/<held-fd>` plus `linkat(..., AT_SYMLINK_FOLLOW)` flow followed by removal of the private staging name, requires link count one before an object is reachable, and treats a crash between those steps as recoverable unpublished staging.
+Initialization probes that exact operation on the target filesystem and fails closed when procfs or the link primitive is unavailable.
+Apple platforms use exact-descriptor `fclonefileat` copy-on-write publication.
+Windows uses `FILE_RENAME_INFO` on the exact opened handle.
+Unix and Apple mutable replacement retains the authenticated source handle, uses unpredictable names inside a verified private `0700` staging directory under the OS mutation lock, rechecks source and destination identities immediately before atomic path replacement, and immediately reopens and authenticates the destination.
+An operating-system administrator or actively malicious same-UID process racing the final path syscall is outside the integrity guarantee because these platforms provide no atomic replace-existing operation from an already-open source descriptor.
+Persistent local substitution remains detectable during immediate readback or the next unlock.
+Vault initialization probes the required primitive on the actual repository filesystem and fails when it is unavailable.
+There is no generic path-based rename fallback.
 It also stores trusted local freshness state outside the sync repository.
-It owns an injectable durability port for file flush, directory flush, atomic replacement, and platform capability reporting.
-Unix, macOS, and Windows implementations remain internal store modules, while fault tests inject a deterministic fake.
-The store exposes a repository trait implemented by `VaultStore` so service tests can use blocking and failing fakes without depending on adapter crates.
+`notecrypt-platform-fs` owns file flush, directory flush, exact-handle publication, atomic replacement, and platform capability reporting behind safe capability-relative APIs.
+Transaction fault tests inject deterministic boundaries above that sealed platform layer.
+The store exposes stable `VaultStore`, unlocked-session, local-lease, and replication-lease capability contracts, while the service owns its own fakeable port around those contracts without depending on adapter crates.
 Key-required reads, mutations, recovery, and replication access exist only on revocable unlocked capabilities.
 Raw store helpers remain crate-private so no caller can bypass session lock or key revocation.
+Production initialization generates the vault identity, Argon2id salt, root key, recovery-slot identity, logical identities, object identities, and nonces inside the store.
+Opening an existing repository never recreates missing durable structure, while passphrase unlock authenticates the bootstrap, runs recovery, verifies every local record, enforces rollback state, and authenticates the complete reachable graph before returning an unlocked capability.
+Passphrase-authorized initialization and unlock retain the exact canonical bootstrap bytes in the unlocked session, and every replication lease requires a byte-identical remote bootstrap before accepting its authenticated commitment.
+Device-only unlock does not create that passphrase-authenticated bootstrap binding and therefore cannot acquire a replication lease.
+The device-local base may contain multiple vault-ID children, and initialization rejects only a collision with the newly generated vault child rather than rejecting unrelated vault state.
+Unlocked sessions and leases own `Arc` references to the store and central key cell so service workers never borrow stack-scoped repository state or copy key material.
+The local lease lists typed file, directory, and tombstone entries, applies optimistic create-directory, rename, move, and delete mutations without physical paths, exports authenticated revisions, and commits streamed revisions against an exact expected snapshot and revision.
+Unlock authenticates every reachable content chunk once before exposing a session.
+Subsequent local mutations reauthenticate the current snapshot, tree, every live or tombstoned revision manifest, and the presence and bounded encoded length of every referenced immutable chunk, but do not reread all current plaintext bytes before a small edit.
+The unlocked session caches a chunk only after successful full authentication, binding the cache entry to the exact vault, generation, object ID, kind, file identity, size, modification time, and non-user-settable platform change time.
+Unix uses inode ctime with nanoseconds and Windows uses exact-handle `FILE_BASIC_INFO.ChangeTime`; a platform without a trustworthy change signal disables this cache and fully authenticates chunks on every mutation.
+Successfully committed chunks populate the cache only after durable head and trusted-state completion and final repository-handle stamping.
+This keeps targeted mutation proportional to current graph metadata and object count rather than total vault content bytes, while export and reopen still authenticate chunk ciphertext before plaintext use.
+Export first copies the selected revision's ciphertext into an owner-only transaction spool under the repository mutation lock, authenticates every spooled chunk, and only then decrypts from that stable spool to the caller, so a source object changed after preflight cannot cause partial authenticated plaintext output.
+Each newly encrypted chunk is written immediately to the still-uncommitted durable batch, while only bounded chunk descriptors remain in memory until manifest, tree, snapshot, and head publication.
 Streaming encryption and decryption acquire a short-lived key guard for one bounded chunk, verify the session generation before and after that chunk, and retain no raw key reference between chunks.
 Replication receives a separate object-safe lease with explicit graph, time, byte, object-count, and quarantine-disk budgets.
 Authenticated cleanup registration, activation, verification, and deregistration are store-capability operations.
+Deregistration accepts only an opaque held-guard proof minted by a once-configured trusted adapter authority and bound to the exact workspace, vault, session generation, and authenticated record commitment.
+The store never accepts a path, boolean, or per-call callback as workspace absence evidence.
 
 ### `notecrypt-backend`
 
@@ -335,6 +365,9 @@ The local-verification key authenticates trusted-head, migration, cleanup, and d
 Passphrase unlock derives this key before trusting existing local state.
 Device unlock first authenticates the wrapped root key with the OS-protected device key, derives the local-verification key, and then verifies the complete slot and trusted-state records.
 Authentication failure disables device unlock and requires passphrase recovery plus explicit local-state repair.
+Passphrase-authorized repair authenticates the bootstrap and complete current repository graph without trusting damaged local records, then returns an opaque linear repair-only capability.
+The only repair action reconstructs the trusted-head record after rereading the exact authorized head under the mutation lock and publication authorization, and a fresh normal unlock is required afterward.
+The repair capability exposes no browsing, export, mutation, device, cleanup, or replication operation.
 
 ## Durable Cryptographic Profile
 
@@ -362,6 +395,14 @@ After successful authenticated decryption, the store validates every protected s
 | Content chunk, profile `0x0001` | XChaCha20-Poly1305 `0x0001` with one fresh per-chunk data key | Fresh 24 CSPRNG bytes for each newly encrypted chunk | Allowed public outer fields only; content sequence, file identity, and plaintext length remain protected and are checked against the authenticated manifest after decryption | AEAD tag; at most 4 MiB plaintext plus 4 KiB framing |
 | Same-position chunk fingerprint, profile `0x0001` | Keyed BLAKE3 `0x0003` with HKDF domain `notecrypt/chunk-fingerprint/v1` | None | File ID, checked chunk position, plaintext length, and plaintext bytes | 32-byte fingerprint; input is one bounded content chunk |
 | Local-state record, profile `0x0001` | Keyed BLAKE3 `0x0002` with HKDF domain `notecrypt/local-verification/v1` and a distinct label for trusted head, trusted remote, backend copy, cleanup, or device slot | None | Crypto profile, local-state version, vault ID, record type, record ID, payload length, and complete canonical payload | 32-byte MAC; at most 64 KiB encoded record bytes |
+
+Protected logical revision and snapshot identities never stand in for immutable object identities.
+An opaque `RevisionLocator` binds a revision ID to its manifest object ID.
+Version 1 file entries remain fixed arrays of five values with a final nested `[revision_id, manifest_object_id]`, and tombstones remain fixed arrays of seven values with the same nested locator or null.
+An opaque `SnapshotParentLocator` binds a parent snapshot ID to its snapshot object ID.
+Version 1 snapshots remain fixed arrays of six values with lexicographically sorted `[snapshot_id, snapshot_object_id]` parent pairs and reject duplicate logical or object identities.
+Replication authenticates each located manifest and parent snapshot, cross-checks the decrypted logical identity, and enforces a tree-wide revision-to-object bijection under the object, edge, byte, and allocation budgets.
+This corrects the unreleased draft version 1 in place, so only the tree and snapshot payload and encrypted-object fixtures change and no legacy decoder is retained.
 
 `notecrypt-crypto` defines distinct typed public contexts and typed plaintext or authenticated values for every non-streaming profile row plus exact encrypt, decrypt, MAC, and verify operations.
 The bounded chunk fingerprint, key-wrap, and content-chunk operations belong to the Task 4 streaming module.
@@ -400,6 +441,11 @@ It streams the currently authenticated plaintext through bounded decrypt and fre
 Already exposed ciphertext, wrappers, keys, and plaintext cannot be made confidential again.
 The source vault exposes only a revocable `CompromiseRekeySource` that enumerates authenticated logical entries and streams bounded plaintext under the source session generation.
 The distinct target is represented by a linear `PendingVaultTarget` that owns the new vault ID, root and recovery keys, logical identities, bootstrap, staged objects, verification state, abort cleanup, and one-way activation.
+The target persists an authenticated inactive state and an early repository marker.
+Public open rejects authenticated inactive targets.
+After verification begins the one-way activation, public open may create only a recovery-bound store while the marker remains, and unlock must authenticate `Activating` or `Active`, durably complete the transition, remove and synchronize the marker, and verify `Active` before exposing a session.
+Availability uses its own profile-1 local-record domain and never reuses backend-copy, trusted-head, cleanup, device-slot, or journal semantics.
+The source capability binds enumeration and every stream to the exact authenticated snapshot, snapshot-object, tree-object, and head commitment captured at acquisition.
 Source and target identities or backends cannot alias.
 Partial targets cannot activate, aborted or activated targets cannot be reused, and no old identity, encrypted object, snapshot parent, or backend-native history may enter the target.
 
@@ -479,6 +525,8 @@ It never reports a clean lock while cleanup remains unconfirmed.
 
 All plaintext workspaces live directly below one fixed canonical Notecrypt-owned versioned workspace base.
 Each child name is the lowercase hexadecimal encoding of a CSPRNG-generated 128-bit `WorkspaceId` and no cleanup record stores or accepts an arbitrary path.
+The store owns only CSPRNG identity issuance and authenticated linear `Registered` and `Active` registry records.
+The service and workspace adapter own the canonical fixed base, OS-backed coordination and ownership locks, permission checks, enumeration, and nofollow physical deletion.
 Workspace enumeration and creation hold a short-lived OS-backed base coordination lock.
 Workspace creation acquires a per-workspace OS-backed ownership lock while still holding the base lock and retains ownership for the entire plaintext lifetime through verified removal.
 Workspace creation follows reserve, register, base lock, create and acquire ownership, activate, release base lock, then materialize ordering.
@@ -551,7 +599,7 @@ Optional backup targets are read-only destinations from Notecrypt's perspective.
 ## Revocable Replication Capability
 
 Raw store helpers remain crate-private and replication receives an object-safe `ReplicationLease` from the unlocked vault capability.
-The lease supports bounded local object-existence checks, authenticated quarantine import that returns typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, bounded reachable-graph verification, streaming encrypted export, fast-forward or reconciled snapshot commit, and atomic trusted-remote observation recording.
+The lease supports bounded local object-existence checks, authenticated quarantine import that returns typed referenced-object metadata, authenticated snapshot, tree, and manifest reads, bounded reachable-graph verification, streaming encrypted export, store-proven fast-forward or reconciliation commit, and atomic trusted-remote observation recording.
 Every method checks the session generation before and after one bounded object or graph step and returns locked when revocation changes the generation.
 Imported bytes remain in quarantine until their kind, profile, canonical encoding, authentication, references, and declared lengths validate.
 Cancellation, timeout, authentication failure, or any limit failure removes the operation's quarantine data before returning.
@@ -560,13 +608,19 @@ Successful bounded traversal returns one store-owned opaque `VerifiedReachableHe
 It binds the vault ID, session generation, authenticated bootstrap and head identities, every reachable snapshot and object identity, effective limit profile, operation ID, and exact backend observation.
 The store represents that observation through bounded canonical bytes in `BackendObservationFingerprint`, never a backend-owned type.
 Only store-internal verification may construct the token, including in tests through a development-only store test-support seam that runs the same binding and verification logic.
-`commit_replicated_snapshot` consumes `VerifiedReachableHead` and returns an equally private store-owned `CommittedReachableHead` only after a fast-forward or reconciled local commit.
+`commit_replicated_snapshot` consumes `VerifiedReachableHead` and returns an equally private store-owned `CommittedReachableHead` only after a store-proven fast-forward local commit.
 No-change and already-current paths consume the proof through an explicit no-local-commit transition that also returns `CommittedReachableHead`.
-The committed binding records only a private `FastForward`, `Reconciled`, or `NoLocalCommit` transition, and never retains caller-supplied `ReplicatedCommitMode` as proof state.
-`record_trusted_remote` consumes `CommittedReachableHead` and atomically records the matching observation.
+The committed binding records only a private `FastForward`, `Reconciled`, or `NoLocalCommit` transition.
+Fast-forward binds exact authenticated local ancestry.
+Reconciliation requires a completely authenticated candidate graph whose two root parent locators are the exact local and verified remote snapshot locator pairs, commits locally, and returns only an opaque `PendingRemotePublication`.
+That pending capability becomes recordable only when a fresh lease authenticates a post-push backend readback whose complete graph and exact head match the merged snapshot.
+No-change requires equality with the exact authenticated current head.
+`record_trusted_remote` consumes `CommittedReachableHead` and atomically records the exact remotely observed snapshot locator, head commitment, observation commitment, and complete binding when traversal proves continuity from the prior trusted remote locator.
+Every later verification must contain the prior exact trusted remote snapshot and object locator or fail with rollback detection.
+When no prior baseline can prove freshness, it returns a linear pending acknowledgement capability and records the unprovable provenance only after that capability is consumed.
 Revocation, a changed effective limit profile, a different observation, partial traversal, or reuse invalidates the transition and cannot advance local or trusted-remote state.
 Compile-fail tests prove external code cannot construct, clone, serialize, or debug-format either token, while runtime tests prove reuse and every binding mismatch fail closed.
-The store keeps one-time transition state keyed by the bound operation so a scripted internal replay attempt is rejected even though external code cannot duplicate a token value.
+The store keeps bounded one-time transition state keyed by the store-generated operation ID so a prior operation ID cannot be registered or replayed even though external code cannot duplicate a token value.
 
 Replication budget profile 1 applies the stricter of these limits, backend-advertised limits, and local available-space limits.
 

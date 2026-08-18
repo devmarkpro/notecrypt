@@ -1,0 +1,71 @@
+error[E0277]: the trait bound `DeviceEnrollment: Clone` is not satisfied
+ --> tests/compile_fail/device_clone.rs:9:20
+  |
+9 |     assert_clone::<DeviceEnrollment>();
+  |                    ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceEnrollment`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/compile_fail/device_clone.rs:6:20
+  |
+6 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DeviceProvider: Clone` is not satisfied
+  --> tests/compile_fail/device_clone.rs:10:20
+   |
+10 |     assert_clone::<DeviceProvider>();
+   |                    ^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceProvider`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/device_clone.rs:6:20
+   |
+ 6 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DeviceReference: Clone` is not satisfied
+  --> tests/compile_fail/device_clone.rs:11:20
+   |
+11 |     assert_clone::<DeviceReference>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceReference`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/device_clone.rs:6:20
+   |
+ 6 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ActiveDeviceSlot: Clone` is not satisfied
+  --> tests/compile_fail/device_clone.rs:12:20
+   |
+12 |     assert_clone::<ActiveDeviceSlot>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ActiveDeviceSlot`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/device_clone.rs:6:20
+   |
+ 6 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DisabledDeviceSlotPendingProviderRemoval: Clone` is not satisfied
+  --> tests/compile_fail/device_clone.rs:13:20
+   |
+13 |     assert_clone::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/device_clone.rs:6:20
+   |
+ 6 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `UntrustedDeviceSlotCandidate: Clone` is not satisfied
+  --> tests/compile_fail/device_clone.rs:14:20
+   |
+14 |     assert_clone::<UntrustedDeviceSlotCandidate>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `UntrustedDeviceSlotCandidate`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/device_clone.rs:6:20
+   |
+ 6 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`

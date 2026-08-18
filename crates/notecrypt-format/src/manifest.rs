@@ -128,6 +128,10 @@ impl ChunkDescriptor {
         self.plaintext_bytes
     }
     #[must_use]
+    pub const fn fingerprint(&self) -> &[u8; 32] {
+        &self.fingerprint
+    }
+    #[must_use]
     pub fn into_parts(mut self) -> ([u8; 32], [u8; 32], u32) {
         (
             self.object_id,

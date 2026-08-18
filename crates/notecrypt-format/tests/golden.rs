@@ -21,7 +21,7 @@ const HASHES: &[(&str, &str)] = &[
     ),
     (
         "tree_object",
-        "904049ea254d46008f46ab3800ef78a9a1fcc7e5143b750013e075b71dbf7cb6",
+        "4c78fce209431696664c6c85ef3529b591af2a32e8e39bb61398b72d5f628f80",
     ),
     (
         "manifest_object",
@@ -29,7 +29,7 @@ const HASHES: &[(&str, &str)] = &[
     ),
     (
         "snapshot_object",
-        "3d7d1fdee5d69fa8dd7078c8f36f56acac38e3c2956e3a1c0cc62d972bab4d6b",
+        "4174d8ec047146916b99e5ebfe185633324c16c357a8a3c94c145571992f5e14",
     ),
     (
         "head",
@@ -53,11 +53,11 @@ const HASHES: &[(&str, &str)] = &[
     ),
     (
         "tree_payload",
-        "53f089a2ac188022cc7b779cabfdf89c8625c17250db5a842c0df24e74fa629a",
+        "7c11e4bb428e05b884e64b07a8b44c528c8b1da7cfa0bd460c490da48eaafb8b",
     ),
     (
         "snapshot_payload",
-        "69937698c9f812482ea01a997dc9dd003b4524c8604bc6c758d0133548246d28",
+        "37ffb9bf3b0d9ad7a6b0077ddb4a63fcc89828550aed2c12839ac749f603676c",
     ),
     (
         "head_payload",
@@ -66,6 +66,22 @@ const HASHES: &[(&str, &str)] = &[
     (
         "local_payload",
         "31b10e973958836437e9ad29f3c714e801cf314ffbf577320e9f54df9f525eb0",
+    ),
+    (
+        "journal_payload",
+        "301fae864ac1d31898c35c2aabdf2a97e473a0fe1b900691f538b53271698215",
+    ),
+    (
+        "journal_local",
+        "274b290b32e4fb6ba2634200b41e113f16f12959f267c0be5f42b567d1f95b2d",
+    ),
+    (
+        "availability_payload",
+        "69ae6bcfc3e36133cc41a2ffa18136d648698c00d33ac6f8c402e532df37eca7",
+    ),
+    (
+        "availability_local",
+        "d83762072a8839d5dd320eb81a7bde484120c12afb54e6b4e25e46c16f5dc299",
     ),
 ];
 
@@ -88,7 +104,9 @@ fn decode_and_reencode(name: &str, bytes: &[u8]) -> Vec<u8> {
             encode_snapshot_object(&decode_snapshot_object(bytes, limits).unwrap()).unwrap()
         }
         "head" => encode_head(&decode_head(bytes, limits).unwrap()).unwrap(),
-        "local" => encode_local_state(&decode_local_state(bytes, limits).unwrap()).unwrap(),
+        "local" | "journal_local" | "availability_local" => {
+            encode_local_state(&decode_local_state(bytes, limits).unwrap()).unwrap()
+        }
         "content_chunk" => {
             encode_content_chunk(&decode_content_chunk(bytes, limits).unwrap()).unwrap()
         }
@@ -103,7 +121,7 @@ fn decode_and_reencode(name: &str, bytes: &[u8]) -> Vec<u8> {
         "head_payload" => {
             encode_head_payload(&decode_head_payload(bytes, limits).unwrap()).unwrap()
         }
-        "local_payload" => {
+        "local_payload" | "journal_payload" | "availability_payload" => {
             encode_local_state_payload(&decode_local_state_payload(bytes, limits).unwrap()).unwrap()
         }
         _ => panic!("unknown fixture {name}"),
@@ -112,7 +130,7 @@ fn decode_and_reencode(name: &str, bytes: &[u8]) -> Vec<u8> {
 
 #[test]
 fn v1_fixtures_and_hashes_are_immutable() {
-    assert_eq!(HASHES.len(), 16, "every v1 schema requires a locked hash");
+    assert_eq!(HASHES.len(), 20, "every v1 schema requires a locked hash");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v1");
     for (name, expected_hash) in HASHES {
         let fixture = fs::read_to_string(root.join(format!("{name}.hex"))).unwrap();

@@ -3,6 +3,12 @@ use std::{fs, path::PathBuf, sync::atomic::AtomicBool};
 use notecrypt_crypto::*;
 use notecrypt_format::*;
 
+const JOURNAL_RECORD_ID: [u8; 32] = [
+    0x33, 0xdb, 0x3c, 0xc4, 0x9b, 0xeb, 0xed, 0x6b, 0x91, 0x99, 0x42, 0xf2, 0x8d, 0x51, 0x70, 0x4a,
+    0xa3, 0x67, 0xf5, 0xdc, 0xba, 0x68, 0xa1, 0x7e, 0x00, 0xdd, 0x7c, 0x0c, 0x51, 0x66, 0x96, 0xa0,
+];
+const AVAILABILITY_RECORD_ID: [u8; 32] = [0x77; 32];
+
 struct FixedRandom(u8);
 impl SecureRandom for FixedRandom {
     fn fill(&mut self, destination: &mut [u8]) -> Result<(), CryptoError> {
@@ -68,7 +74,7 @@ fn protected_cases(fingerprint: [u8; 32]) -> Vec<(&'static str, Vec<u8>)> {
                 [17; 16],
                 [16; 16],
                 "fixture.md",
-                [15; 32],
+                RevisionLocator::new([15; 32], [6; 32]),
                 &DecodeLimits::PHASE_1,
             )
             .unwrap(),
@@ -78,7 +84,7 @@ fn protected_cases(fingerprint: [u8; 32]) -> Vec<(&'static str, Vec<u8>)> {
     .unwrap();
     let snapshot = SnapshotPayload::try_new(
         [18; 32],
-        vec![[19; 32]],
+        vec![SnapshotParentLocator::new([19; 32], [8; 32])],
         [5; 32],
         [20; 16],
         "fixture-device",
@@ -93,6 +99,23 @@ fn protected_cases(fingerprint: [u8; 32]) -> Vec<(&'static str, Vec<u8>)> {
         &DecodeLimits::PHASE_1,
     )
     .unwrap();
+    let journal = LocalStatePayload::try_new(
+        LocalRecordType::Journal,
+        JOURNAL_RECORD_ID,
+        unhex("8901500101010101010101010101010101010150010101010101010101010101010101010358200404040404040404040404040404040404040404040404040404040404040404125261757468656e746963617465642d68656164582099636c2742bb74a78d15e231133344cbf22a90457b3e0e3ac45f2e30ef64912b01"),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
+    let mut availability_inner = vec![0x83, 0x01, 0x50];
+    availability_inner.extend_from_slice(&[1; 16]);
+    availability_inner.push(0x00);
+    let availability = LocalStatePayload::try_new(
+        LocalRecordType::VaultAvailability,
+        AVAILABILITY_RECORD_ID,
+        availability_inner,
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
     vec![
         ("content_payload", encode_content_payload(&content).unwrap()),
         ("manifest_payload", encode_manifest(&manifest).unwrap()),
@@ -103,6 +126,14 @@ fn protected_cases(fingerprint: [u8; 32]) -> Vec<(&'static str, Vec<u8>)> {
         ),
         ("head_payload", encode_head_payload(&head).unwrap()),
         ("local_payload", encode_local_state_payload(&local).unwrap()),
+        (
+            "journal_payload",
+            encode_local_state_payload(&journal).unwrap(),
+        ),
+        (
+            "availability_payload",
+            encode_local_state_payload(&availability).unwrap(),
+        ),
     ]
 }
 
@@ -255,6 +286,46 @@ fn crypto_cases() -> Vec<(&'static str, Vec<u8>)> {
         &DecodeLimits::PHASE_1,
     )
     .unwrap();
+    let journal_payload =
+        decode_local_state_payload(&fixture("journal_payload"), &DecodeLimits::PHASE_1).unwrap();
+    let journal_authenticator = authenticate_local_state(
+        &LocalStateContext::try_new(identity(LOCAL_STATE_OBJECT_KIND, JOURNAL_RECORD_ID)).unwrap(),
+        &fixture("journal_payload"),
+        &keys.local_verification,
+    )
+    .unwrap();
+    let journal_local = LocalStateRecord::try_new(
+        CryptoProfileId::profile_one(),
+        AuthenticationAlgorithmId::keyed_blake3_256(),
+        [1; 16],
+        FormatVersion::v1(),
+        JOURNAL_RECORD_ID,
+        journal_payload,
+        journal_authenticator.as_bytes(),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
+    let availability_payload =
+        decode_local_state_payload(&fixture("availability_payload"), &DecodeLimits::PHASE_1)
+            .unwrap();
+    let availability_authenticator = authenticate_local_state(
+        &LocalStateContext::try_new(identity(LOCAL_STATE_OBJECT_KIND, AVAILABILITY_RECORD_ID))
+            .unwrap(),
+        &fixture("availability_payload"),
+        &keys.local_verification,
+    )
+    .unwrap();
+    let availability_local = LocalStateRecord::try_new(
+        CryptoProfileId::profile_one(),
+        AuthenticationAlgorithmId::keyed_blake3_256(),
+        [1; 16],
+        FormatVersion::v1(),
+        AVAILABILITY_RECORD_ID,
+        availability_payload,
+        availability_authenticator.as_bytes(),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
     let chunk_key = ChunkKeyPlaintext::generate(&mut random).unwrap();
     let content = encrypt_content_chunk(
         &ContentChunkContext::try_new(identity(CONTENT_CHUNK_OBJECT_KIND, [10; 32])).unwrap(),
@@ -327,6 +398,11 @@ fn crypto_cases() -> Vec<(&'static str, Vec<u8>)> {
         ),
         ("head", encode_head(&head).unwrap()),
         ("local", encode_local_state(&local).unwrap()),
+        ("journal_local", encode_local_state(&journal_local).unwrap()),
+        (
+            "availability_local",
+            encode_local_state(&availability_local).unwrap(),
+        ),
         ("content_chunk", encode_content_chunk(&content).unwrap()),
     ];
     cases.extend(protected);

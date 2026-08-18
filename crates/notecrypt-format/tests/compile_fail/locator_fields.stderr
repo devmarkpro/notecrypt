@@ -1,0 +1,43 @@
+error[E0616]: field `revision_id` of struct `RevisionLocator` is private
+ --> tests/compile_fail/locator_fields.rs:6:22
+  |
+6 |     let _ = revision.revision_id;
+  |                      ^^^^^^^^^^^ private field
+  |
+help: a method `revision_id` also exists, call it with parentheses
+  |
+6 |     let _ = revision.revision_id();
+  |                                 ++
+
+error[E0616]: field `manifest_object_id` of struct `RevisionLocator` is private
+ --> tests/compile_fail/locator_fields.rs:7:22
+  |
+7 |     let _ = revision.manifest_object_id;
+  |                      ^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `manifest_object_id` also exists, call it with parentheses
+  |
+7 |     let _ = revision.manifest_object_id();
+  |                                        ++
+
+error[E0616]: field `snapshot_id` of struct `SnapshotParentLocator` is private
+ --> tests/compile_fail/locator_fields.rs:8:20
+  |
+8 |     let _ = parent.snapshot_id;
+  |                    ^^^^^^^^^^^ private field
+  |
+help: a method `snapshot_id` also exists, call it with parentheses
+  |
+8 |     let _ = parent.snapshot_id();
+  |                               ++
+
+error[E0616]: field `snapshot_object_id` of struct `SnapshotParentLocator` is private
+ --> tests/compile_fail/locator_fields.rs:9:20
+  |
+9 |     let _ = parent.snapshot_object_id;
+  |                    ^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `snapshot_object_id` also exists, call it with parentheses
+  |
+9 |     let _ = parent.snapshot_object_id();
+  |                                      ++

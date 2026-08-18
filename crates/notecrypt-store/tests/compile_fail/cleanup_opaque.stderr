@@ -1,0 +1,27 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/cleanup_opaque.rs:4:15
+  |
+4 |     let _id = CleanupWorkspaceId([0_u8; 16]);
+  |               ^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/cleanup.rs
+  |
+  | pub struct CleanupWorkspaceId([u8; 16]);
+  |                               ^^^^^^^^ private field
+help: you might have meant to use the `from_csprng` associated function
+  |
+4 |     let _id = CleanupWorkspaceId::from_csprng([0_u8; 16]);
+  |                                 +++++++++++++
+
+error: cannot construct `RegisteredWorkspace` with struct literal syntax due to private fields
+ --> tests/compile_fail/cleanup_opaque.rs:5:23
+  |
+5 |     let _registered = RegisteredWorkspace {};
+  |                       ^^^^^^^^^^^^^^^^^^^
+
+error: cannot construct `WorkspaceAbsenceProof` with struct literal syntax due to private fields
+ --> tests/compile_fail/cleanup_opaque.rs:6:18
+  |
+6 |     let _proof = WorkspaceAbsenceProof {};
+  |                  ^^^^^^^^^^^^^^^^^^^^^

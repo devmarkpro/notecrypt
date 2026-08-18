@@ -1,0 +1,35 @@
+error[E0382]: use of moved value: `value`
+ --> tests/compile_fail/reachability_reuse.rs:9:25
+  |
+7 | fn reuse_publication(value: PendingRemotePublication) {
+  |                      ----- move occurs because `value` has type `PendingRemotePublication`, which does not implement the `Copy` trait
+8 |     consume_publication(value);
+  |                         ----- value moved here
+9 |     consume_publication(value);
+  |                         ^^^^^ value used here after move
+  |
+note: consider changing this parameter type in function `consume_publication` to borrow instead if owning the value isn't necessary
+ --> tests/compile_fail/reachability_reuse.rs:3:27
+  |
+3 | fn consume_publication(_: PendingRemotePublication) {}
+  |    -------------------    ^^^^^^^^^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+  |    |
+  |    in this function
+
+error[E0382]: use of moved value: `value`
+  --> tests/compile_fail/reachability_reuse.rs:14:29
+   |
+12 | fn reuse_acknowledgement(value: PendingUnprovableRemote) {
+   |                          ----- move occurs because `value` has type `PendingUnprovableRemote`, which does not implement the `Copy` trait
+13 |     consume_acknowledgement(value);
+   |                             ----- value moved here
+14 |     consume_acknowledgement(value);
+   |                             ^^^^^ value used here after move
+   |
+note: consider changing this parameter type in function `consume_acknowledgement` to borrow instead if owning the value isn't necessary
+  --> tests/compile_fail/reachability_reuse.rs:5:31
+   |
+ 5 | fn consume_acknowledgement(_: PendingUnprovableRemote) {}
+   |    -----------------------    ^^^^^^^^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+   |    |
+   |    in this function

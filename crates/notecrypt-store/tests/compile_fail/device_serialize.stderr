@@ -1,0 +1,143 @@
+error[E0277]: the trait bound `DeviceEnrollment: serde::Serialize` is not satisfied
+ --> tests/compile_fail/device_serialize.rs:9:24
+  |
+9 |     assert_serialize::<DeviceEnrollment>();
+  |                        ^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceEnrollment`
+  |
+  = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceEnrollment` type
+  = note: for types from other crates check whether the crate offers a `serde` feature flag
+  = help: the following other types implement trait `Serialize`:
+            &'a T
+            &'a mut T
+            ()
+            (T,)
+            (T0, T1)
+            (T0, T1, T2)
+            (T0, T1, T2, T3)
+            (T0, T1, T2, T3, T4)
+          and $N others
+note: required by a bound in `assert_serialize`
+ --> tests/compile_fail/device_serialize.rs:6:24
+  |
+6 | fn assert_serialize<T: serde::Serialize>() {}
+  |                        ^^^^^^^^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DeviceProvider: serde::Serialize` is not satisfied
+  --> tests/compile_fail/device_serialize.rs:10:24
+   |
+10 |     assert_serialize::<DeviceProvider>();
+   |                        ^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceProvider`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceProvider` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/device_serialize.rs:6:24
+   |
+ 6 | fn assert_serialize<T: serde::Serialize>() {}
+   |                        ^^^^^^^^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DeviceReference: serde::Serialize` is not satisfied
+  --> tests/compile_fail/device_serialize.rs:11:24
+   |
+11 |     assert_serialize::<DeviceReference>();
+   |                        ^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceReference`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceReference` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/device_serialize.rs:6:24
+   |
+ 6 | fn assert_serialize<T: serde::Serialize>() {}
+   |                        ^^^^^^^^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ActiveDeviceSlot: serde::Serialize` is not satisfied
+  --> tests/compile_fail/device_serialize.rs:12:24
+   |
+12 |     assert_serialize::<ActiveDeviceSlot>();
+   |                        ^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ActiveDeviceSlot`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ActiveDeviceSlot` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/device_serialize.rs:6:24
+   |
+ 6 | fn assert_serialize<T: serde::Serialize>() {}
+   |                        ^^^^^^^^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DisabledDeviceSlotPendingProviderRemoval: serde::Serialize` is not satisfied
+  --> tests/compile_fail/device_serialize.rs:13:24
+   |
+13 |     assert_serialize::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DisabledDeviceSlotPendingProviderRemoval` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/device_serialize.rs:6:24
+   |
+ 6 | fn assert_serialize<T: serde::Serialize>() {}
+   |                        ^^^^^^^^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `UntrustedDeviceSlotCandidate: serde::Serialize` is not satisfied
+  --> tests/compile_fail/device_serialize.rs:14:24
+   |
+14 |     assert_serialize::<UntrustedDeviceSlotCandidate>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `UntrustedDeviceSlotCandidate`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `UntrustedDeviceSlotCandidate` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/device_serialize.rs:6:24
+   |
+ 6 | fn assert_serialize<T: serde::Serialize>() {}
+   |                        ^^^^^^^^^^^^^^^^ required by this bound in `assert_serialize`

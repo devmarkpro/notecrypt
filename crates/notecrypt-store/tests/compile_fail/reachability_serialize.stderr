@@ -1,0 +1,95 @@
+error[E0277]: the trait bound `VerifiedReachableHead: serde::Serialize` is not satisfied
+ --> tests/compile_fail/reachability_serialize.rs:9:26
+  |
+9 |     requires_serialize::<VerifiedReachableHead>();
+  |                          ^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `VerifiedReachableHead`
+  |
+  = note: for local types consider adding `#[derive(serde::Serialize)]` to your `VerifiedReachableHead` type
+  = note: for types from other crates check whether the crate offers a `serde` feature flag
+  = help: the following other types implement trait `Serialize`:
+            &'a T
+            &'a mut T
+            ()
+            (T,)
+            (T0, T1)
+            (T0, T1, T2)
+            (T0, T1, T2, T3)
+            (T0, T1, T2, T3, T4)
+          and $N others
+note: required by a bound in `requires_serialize`
+ --> tests/compile_fail/reachability_serialize.rs:6:26
+  |
+6 | fn requires_serialize<T: serde::Serialize>() {}
+  |                          ^^^^^^^^^^^^^^^^ required by this bound in `requires_serialize`
+
+error[E0277]: the trait bound `CommittedReachableHead: serde::Serialize` is not satisfied
+  --> tests/compile_fail/reachability_serialize.rs:10:26
+   |
+10 |     requires_serialize::<CommittedReachableHead>();
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `CommittedReachableHead`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `CommittedReachableHead` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `requires_serialize`
+  --> tests/compile_fail/reachability_serialize.rs:6:26
+   |
+ 6 | fn requires_serialize<T: serde::Serialize>() {}
+   |                          ^^^^^^^^^^^^^^^^ required by this bound in `requires_serialize`
+
+error[E0277]: the trait bound `PendingRemotePublication: serde::Serialize` is not satisfied
+  --> tests/compile_fail/reachability_serialize.rs:11:26
+   |
+11 |     requires_serialize::<PendingRemotePublication>();
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `PendingRemotePublication`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `PendingRemotePublication` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `requires_serialize`
+  --> tests/compile_fail/reachability_serialize.rs:6:26
+   |
+ 6 | fn requires_serialize<T: serde::Serialize>() {}
+   |                          ^^^^^^^^^^^^^^^^ required by this bound in `requires_serialize`
+
+error[E0277]: the trait bound `PendingUnprovableRemote: serde::Serialize` is not satisfied
+  --> tests/compile_fail/reachability_serialize.rs:12:26
+   |
+12 |     requires_serialize::<PendingUnprovableRemote>();
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `PendingUnprovableRemote`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `PendingUnprovableRemote` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `requires_serialize`
+  --> tests/compile_fail/reachability_serialize.rs:6:26
+   |
+ 6 | fn requires_serialize<T: serde::Serialize>() {}
+   |                          ^^^^^^^^^^^^^^^^ required by this bound in `requires_serialize`

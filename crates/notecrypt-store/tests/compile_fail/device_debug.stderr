@@ -1,0 +1,71 @@
+error[E0277]: `DeviceEnrollment` doesn't implement `Debug`
+ --> tests/compile_fail/device_debug.rs:9:20
+  |
+9 |     assert_debug::<DeviceEnrollment>();
+  |                    ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceEnrollment`
+  |
+note: required by a bound in `assert_debug`
+ --> tests/compile_fail/device_debug.rs:6:20
+  |
+6 | fn assert_debug<T: std::fmt::Debug>() {}
+  |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DeviceProvider` doesn't implement `Debug`
+  --> tests/compile_fail/device_debug.rs:10:20
+   |
+10 |     assert_debug::<DeviceProvider>();
+   |                    ^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceProvider`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/device_debug.rs:6:20
+   |
+ 6 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DeviceReference` doesn't implement `Debug`
+  --> tests/compile_fail/device_debug.rs:11:20
+   |
+11 |     assert_debug::<DeviceReference>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceReference`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/device_debug.rs:6:20
+   |
+ 6 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ActiveDeviceSlot` doesn't implement `Debug`
+  --> tests/compile_fail/device_debug.rs:12:20
+   |
+12 |     assert_debug::<ActiveDeviceSlot>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ActiveDeviceSlot`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/device_debug.rs:6:20
+   |
+ 6 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DisabledDeviceSlotPendingProviderRemoval` doesn't implement `Debug`
+  --> tests/compile_fail/device_debug.rs:13:20
+   |
+13 |     assert_debug::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/device_debug.rs:6:20
+   |
+ 6 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `UntrustedDeviceSlotCandidate` doesn't implement `Debug`
+  --> tests/compile_fail/device_debug.rs:14:20
+   |
+14 |     assert_debug::<UntrustedDeviceSlotCandidate>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `UntrustedDeviceSlotCandidate`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/device_debug.rs:6:20
+   |
+ 6 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`

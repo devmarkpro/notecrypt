@@ -1,0 +1,19 @@
+error[E0382]: use of moved value: `target`
+ --> tests/compile_fail/compromise_reuse_target.rs:5:13
+  |
+3 | fn reuse(target: Box<dyn PendingVaultTarget>) {
+  |          ------ move occurs because `target` has type `Box<dyn PendingVaultTarget>`, which does not implement the `Copy` trait
+4 |     let _ = target.abort();
+  |                    ------- `target` moved due to this method call
+5 |     let _ = target.abort();
+  |             ^^^^^^ value used here after move
+  |
+note: `notecrypt_store::PendingVaultTarget::abort` takes ownership of the receiver `self`, which moves `target`
+ --> src/compromise.rs
+  |
+  |     fn abort(self: Box<Self>) -> Result<(), StoreError>;
+  |              ^^^^
+help: you could `clone` the value and consume it, if the following trait bounds could be satisfied: `dyn PendingVaultTarget: Sized` and `dyn PendingVaultTarget: Clone`
+  |
+4 |     let _ = target.clone().abort();
+  |                   ++++++++

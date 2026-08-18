@@ -9,6 +9,7 @@ const PRODUCT_PACKAGES: &[&str] = &[
     "notecrypt-core",
     "notecrypt-format",
     "notecrypt-crypto",
+    "notecrypt-platform-fs",
     "notecrypt-store",
     "notecrypt-backend",
     "notecrypt-replication",
@@ -212,9 +213,15 @@ fn allowed_internal_dependencies(package: &str) -> BTreeSet<&'static str> {
             &["notecrypt-format", "notecrypt-crypto"][..],
         ),
         ("notecrypt-crypto", &[][..]),
+        ("notecrypt-platform-fs", &[][..]),
         (
             "notecrypt-store",
-            &["notecrypt-core", "notecrypt-format", "notecrypt-crypto"][..],
+            &[
+                "notecrypt-core",
+                "notecrypt-format",
+                "notecrypt-crypto",
+                "notecrypt-platform-fs",
+            ][..],
         ),
         ("notecrypt-backend", &[][..]),
         (
@@ -262,4 +269,54 @@ fn workspace_packages_are_private_and_dependencies_point_inward() {
     workspace.assert_resolver("3").unwrap();
     workspace.assert_all_private().unwrap();
     workspace.assert_dependency_rules().unwrap();
+}
+
+#[test]
+fn platform_fs_is_the_only_narrow_unsafe_island() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("integration test below workspace root");
+    let island = workspace_root.join("crates/notecrypt-platform-fs");
+    let manifest = parse_manifest(&island.join("Cargo.toml")).expect("unsafe island manifest");
+    let lints = manifest
+        .get("lints")
+        .and_then(Value::as_table)
+        .expect("unsafe island must define local lints");
+    assert!(lints.get("workspace").is_none());
+    assert_eq!(
+        lints
+            .get("rust")
+            .and_then(Value::as_table)
+            .and_then(|rust| rust.get("unsafe_op_in_unsafe_fn"))
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+
+    let island_source = fs::read_to_string(island.join("src/lib.rs")).expect("read island source");
+    assert_eq!(island_source.matches("#[allow(unsafe_code)]").count(), 1);
+    let unsafe_blocks = island_source.matches("unsafe {").count();
+    assert_eq!(unsafe_blocks, 10);
+    assert_eq!(island_source.matches("SAFETY:").count(), unsafe_blocks);
+    assert!(!island_source.contains("unsafe fn"));
+    assert!(!island_source.contains("unsafe impl"));
+    assert!(!island_source.contains("extern \""));
+
+    let workspace = WorkspacePolicy::load(env!("CARGO_MANIFEST_DIR")).unwrap();
+    for package in workspace.packages {
+        if package.manifest_path == island.join("Cargo.toml") {
+            continue;
+        }
+        let manifest = parse_manifest(&package.manifest_path).expect("crate manifest");
+        assert_eq!(
+            manifest
+                .get("lints")
+                .and_then(Value::as_table)
+                .and_then(|lints| lints.get("workspace"))
+                .and_then(Value::as_bool),
+            Some(true),
+            "{} must inherit workspace unsafe_code=forbid",
+            package.manifest_path.display()
+        );
+    }
 }

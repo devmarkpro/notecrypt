@@ -629,3 +629,161 @@ fn cross_kind_slot_authenticator_and_fingerprint_mutations_fail_closed() {
         .is_err()
     );
 }
+
+#[test]
+fn revision_and_parent_object_locator_substitutions_fail_authentication() {
+    let mut root_random = FixedRandom(0x31);
+    let root = VaultRootKey::generate(&mut root_random).unwrap();
+    let keys = derive_vault_keys(&root).unwrap();
+    let limits = DecodeLimits::PHASE_1;
+
+    let tree_context = TreeContext::try_new(identity(TREE_OBJECT_KIND, 0x41)).unwrap();
+    let tree_bytes = |manifest_object_id| {
+        encode_tree(
+            &LogicalTree::try_new(
+                [1; 16],
+                vec![
+                    TreeEntry::root([1; 16]),
+                    TreeEntry::file(
+                        [2; 16],
+                        [1; 16],
+                        "note.md",
+                        RevisionLocator::new([3; 32], manifest_object_id),
+                        &limits,
+                    )
+                    .unwrap(),
+                ],
+                &limits,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let mut first_random = FixedRandom(0x51);
+    let first_tree = encrypt_tree(
+        &tree_context,
+        TreePlaintext::try_new(tree_bytes([4; 32])).unwrap(),
+        &keys.metadata,
+        &mut first_random,
+    )
+    .unwrap();
+    let mut second_random = FixedRandom(0x51);
+    let second_tree = encrypt_tree(
+        &tree_context,
+        TreePlaintext::try_new(tree_bytes([5; 32])).unwrap(),
+        &keys.metadata,
+        &mut second_random,
+    )
+    .unwrap();
+    let substituted_tree = TreeEnvelope::try_from_parts(
+        AeadEnvelopeParts::try_new(
+            identity(TREE_OBJECT_KIND, 0x41),
+            first_tree.parts().nonce(),
+            second_tree.parts().ciphertext().to_vec(),
+            first_tree.parts().tag(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(decrypt_tree(&tree_context, &substituted_tree, &keys.metadata).is_err());
+
+    let snapshot_context = SnapshotContext::try_new(identity(SNAPSHOT_OBJECT_KIND, 0x42)).unwrap();
+    let snapshot_bytes = |parent_object_id| {
+        encode_snapshot_payload(
+            &SnapshotPayload::try_new(
+                [6; 32],
+                vec![SnapshotParentLocator::new([7; 32], parent_object_id)],
+                [8; 32],
+                [9; 16],
+                "device",
+                &limits,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let mut first_random = FixedRandom(0x61);
+    let first_snapshot = encrypt_snapshot(
+        &snapshot_context,
+        SnapshotPlaintext::try_new(snapshot_bytes([10; 32])).unwrap(),
+        &keys.metadata,
+        &keys.snapshot_authentication,
+        &mut first_random,
+    )
+    .unwrap();
+    let mut second_random = FixedRandom(0x61);
+    let second_snapshot = encrypt_snapshot(
+        &snapshot_context,
+        SnapshotPlaintext::try_new(snapshot_bytes([11; 32])).unwrap(),
+        &keys.metadata,
+        &keys.snapshot_authentication,
+        &mut second_random,
+    )
+    .unwrap();
+    let substituted_snapshot = SnapshotEnvelope::try_new(
+        AeadEnvelopeParts::try_new(
+            identity(SNAPSHOT_OBJECT_KIND, 0x42),
+            first_snapshot.encrypted_parts().nonce(),
+            second_snapshot.encrypted_parts().ciphertext().to_vec(),
+            first_snapshot.encrypted_parts().tag(),
+        )
+        .unwrap(),
+        first_snapshot.outer_authenticator(),
+    )
+    .unwrap();
+    assert!(
+        decrypt_snapshot(
+            &snapshot_context,
+            &substituted_snapshot,
+            &keys.metadata,
+            &keys.snapshot_authentication,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn journal_local_record_type_is_covered_by_authentication() {
+    let mut random = FixedRandom(91);
+    let root = VaultRootKey::generate(&mut random).unwrap();
+    let keys = derive_vault_keys(&root).unwrap();
+    let context = LocalStateContext::try_new(identity(LOCAL_STATE_OBJECT_KIND, 9)).unwrap();
+    let payload = LocalStatePayload::try_new(
+        LocalRecordType::Journal,
+        [9; 32],
+        b"journal".to_vec(),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
+    let canonical = encode_local_state_payload(&payload).unwrap();
+    let authenticator =
+        authenticate_local_state(&context, &canonical, &keys.local_verification).unwrap();
+    let mut crossed = canonical;
+    crossed[2] = LocalRecordType::Cleanup as u8;
+    assert!(
+        verify_local_state(&context, &crossed, &authenticator, &keys.local_verification).is_err()
+    );
+}
+
+#[test]
+fn vault_availability_local_record_type_is_covered_by_authentication() {
+    let mut random = FixedRandom(92);
+    let root = VaultRootKey::generate(&mut random).unwrap();
+    let keys = derive_vault_keys(&root).unwrap();
+    let context = LocalStateContext::try_new(identity(LOCAL_STATE_OBJECT_KIND, 10)).unwrap();
+    let payload = LocalStatePayload::try_new(
+        LocalRecordType::VaultAvailability,
+        [10; 32],
+        b"vault-availability".to_vec(),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
+    let canonical = encode_local_state_payload(&payload).unwrap();
+    let authenticator =
+        authenticate_local_state(&context, &canonical, &keys.local_verification).unwrap();
+    let mut crossed = canonical;
+    crossed[2] = LocalRecordType::BackendCopy as u8;
+    assert!(
+        verify_local_state(&context, &crossed, &authenticator, &keys.local_verification).is_err()
+    );
+}

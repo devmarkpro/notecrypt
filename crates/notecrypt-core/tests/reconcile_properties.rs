@@ -211,7 +211,7 @@ proptest! {
                 root,
                 FileEntry::new(
                     file_id(2),
-                    entry_name(&format!("\u{1d400}{seed}")),
+                    entry_name(&format!("\u{1d400}-{seed}")),
                     revision_id(2),
                 ),
             ).unwrap(),
@@ -223,7 +223,7 @@ proptest! {
                 root,
                 FileEntry::new(
                     file_id(3),
-                    entry_name(&format!("a{seed}")),
+                    entry_name(&format!("a-{seed}")),
                     revision_id(3),
                 ),
             ).unwrap(),

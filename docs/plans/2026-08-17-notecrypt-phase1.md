@@ -751,12 +751,19 @@ Commit: `feat(format): define versioned encrypted vault formats`
 **Files:**
 
 - Modify: `crates/notecrypt-store/Cargo.toml`
+- Create: `crates/notecrypt-platform-fs/Cargo.toml`
+- Create: `crates/notecrypt-platform-fs/src/lib.rs`
 - Create: `crates/notecrypt-store/src/error.rs`
+- Create: `crates/notecrypt-store/src/availability.rs`
+- Create: `crates/notecrypt-store/src/batch.rs`
+- Create: `crates/notecrypt-store/src/benchmark_support.rs`
 - Create: `crates/notecrypt-store/src/layout.rs`
 - Create: `crates/notecrypt-store/src/repository.rs`
 - Create: `crates/notecrypt-store/src/journal.rs`
 - Create: `crates/notecrypt-store/src/transaction.rs`
 - Create: `crates/notecrypt-store/src/recovery.rs`
+- Create: `crates/notecrypt-store/src/local.rs`
+- Create: `crates/notecrypt-store/src/local_io.rs`
 - Create: `crates/notecrypt-store/src/trusted_state.rs`
 - Create: `crates/notecrypt-store/src/cleanup.rs`
 - Create: `crates/notecrypt-store/src/replication.rs`
@@ -777,7 +784,40 @@ Commit: `feat(format): define versioned encrypted vault formats`
 - Test: `crates/notecrypt-store/tests/compile_fail/reachability_serialize.rs`
 - Test: `crates/notecrypt-store/tests/compile_fail/reachability_debug.rs`
 - Test: `crates/notecrypt-store/tests/compromise_capabilities.rs`
+- Test: `crates/notecrypt-store/tests/device_slots.rs`
+- Test: `crates/notecrypt-store/tests/local_repository.rs`
 - Benchmark: `benches/src/store.rs`
+
+**Approved Task 6 contract correction:**
+
+`notecrypt-platform-fs` is the sole audited unsafe island and exposes only safe handle-relative filesystem capabilities.
+After the two initial roots are acquired without following links, store operations accept validated portable physical components rather than paths.
+Repository ciphertext staging lives transiently at `.notecrypt-txn/<CSPRNG transaction ID>` on the repository filesystem so publication remains atomic across separately configured repository and local-state volumes.
+The transient tree contains only canonical ciphertext, authenticated public bytes, and opaque identities, stays outside Git inventory, and is empty after a completed transaction.
+Journal, trusted state, cleanup records, device slots, and replication quarantine remain under the vault-ID-scoped device-local state root.
+The store owns ID generation for replication operations, workspaces, device slots, and compromise targets.
+Task 6 owns only authenticated linear workspace registry states; Task 9 service orchestration and the workspace adapter own fixed-base locking, enumeration, permission verification, and physical deletion.
+Replication import is an operation-owned bounded `QuarantineImport: Write` sink, while backend watchdog interruption belongs to Tasks 7 and 17.
+Unprovable remote freshness uses a consuming store-owned pending acknowledgement capability rather than caller-asserted provenance.
+The independent graph-edge limit is 100,000.
+Compromise target staging accepts metadata and bytes but no caller-supplied identity or history fields.
+The unreleased version 1 tree schema uses opaque revision locators `[revision_id, manifest_object_id]` inside the existing file and tombstone array shapes.
+The unreleased version 1 snapshot schema uses opaque parent locators `[snapshot_id, snapshot_object_id]` inside the existing six-value snapshot shape, sorts complete pairs, and rejects duplicate logical or object identities.
+Store traversal authenticates located objects, cross-checks protected logical identities, and enforces the tree-wide revision-to-object bijection within the replication budgets.
+This pre-release correction replaces the four affected version 1 fixtures in place and does not accept the discarded flat draft shapes.
+Production initialization owns every new identity, salt, key, and nonce, and public recovery unlock consumes a passphrase rather than accepting a pre-derived wrapping key.
+Create-new and open-existing are distinct layout operations, and the shared local-state base permits unrelated vault-ID children.
+Unlocked sessions and local leases own `Arc` store and key-cell references, expose no keys, and authenticate recovery, rollback state, all local records, and the complete reachable graph before use.
+Local streamed revisions stage each completed encrypted chunk immediately in one uncommitted durable batch and retain only bounded descriptors until the final guarded transaction.
+Typed local mutations cover directory creation, rename or move, and file or empty-directory tombstones with optimistic snapshot and revision checks.
+Unlock authenticates the complete reachable graph once, while each subsequent local mutation reauthenticates the current snapshot, tree, every live or tombstoned revision manifest, and the presence and bounded encoded length of every referenced immutable chunk without rereading the entire current vault content.
+Cache a successfully authenticated chunk only for the exact unlocked vault, generation, object ID, kind, file identity, size, modification time, and non-user-settable platform change time.
+Use Unix inode ctime with nanoseconds and Windows exact-handle `FILE_BASIC_INFO.ChangeTime`; if no trustworthy change signal is available, disable chunk-stamp caching and perform full authentication on every mutation.
+After a successful durable transaction and authenticated final readback, seed the cache from exact final repository handles for newly published chunks so the next metadata-only mutation does not reread their ciphertext.
+Exact-revision export copies ciphertext into an owner-only transaction spool, authenticates that complete stable spool, and decrypts only from the spool after preflight succeeds so a source object changed by an output callback cannot expose partial authenticated plaintext.
+Compromise targets persist authenticated inactive state and cannot be opened or unlocked publicly until complete verification performs the one-way durable activation transition.
+The authenticated availability record uses the distinct unreleased profile-1 local record type value `7`; value `8` and all other unknown values remain rejected.
+The feature-gated benchmark-support entry executes the production `DurableBatch` staging, authentication, publication, synchronization, and cleanup path without cryptography so filesystem cost stays separately measurable.
 
 **Interfaces:**
 
@@ -792,269 +832,42 @@ Assert that cleanup accepts only CSPRNG-generated 128-bit workspace identities, 
 
 - [ ] **Step 2: Implement layout and immutable object publication**
 
-```rust
-pub struct VaultStore {
-    repository_root: std::path::PathBuf,
-    local_state_root: std::path::PathBuf,
-    durability: std::sync::Arc<dyn Durability>,
-}
-
-impl VaultStore {
-    pub fn create(
-        input: CreateVault,
-        durability: std::sync::Arc<dyn Durability>,
-    ) -> Result<Self, StoreError>;
-    pub fn open(
-        input: OpenVault,
-        durability: std::sync::Arc<dyn Durability>,
-    ) -> Result<Self, StoreError>;
-    pub(crate) fn read_trusted_snapshot(
-        &self,
-        keys: &VaultKeys,
-    ) -> Result<ReadSnapshot, StoreError>;
-    pub(crate) fn begin_mutation(&self, base: SnapshotId) -> Result<Mutation, StoreError>;
-    pub(crate) fn recover(&self, keys: &VaultKeys) -> Result<RecoveryReport, StoreError>;
-}
-
-pub trait VaultRepository: Send + Sync {
-    fn initialize(&self, request: InitializeRepository) -> Result<RepositorySnapshot, StoreError>;
-    fn begin_pending_target(&self, request: BeginPendingVaultTarget) -> Result<Box<dyn PendingVaultTarget>, StoreError>;
-    fn unlock(&self, request: UnlockRepository) -> Result<Box<dyn UnlockedVault>, StoreError>;
-    fn list_device_slots(&self) -> Result<Vec<LocalDeviceSlotRecord>, StoreError>;
-}
-
-pub trait UnlockedVault: Send + Sync {
-    fn acquire_lease(&self) -> Result<Box<dyn UnlockedVaultLease>, StoreError>;
-    fn acquire_replication_lease(
-        &self,
-        limits: ReplicationLimits,
-    ) -> Result<Box<dyn ReplicationLease>, StoreError>;
-    fn acquire_compromise_rekey_source(&self) -> Result<Box<dyn CompromiseRekeySource>, StoreError>;
-    fn begin_close(&self);
-    fn close(self: Box<Self>) -> Result<(), StoreError>;
-}
-
-pub trait UnlockedVaultLease: Send {
-    fn list(&self, request: ListRepositoryEntries) -> Result<Vec<RepositoryEntry>, StoreError>;
-    fn apply(&self, request: RepositoryMutation) -> Result<RepositorySnapshot, StoreError>;
-    fn export(&self, request: ExportRepositoryFile) -> Result<ExportedFile, StoreError>;
-    fn commit_streamed_revision(
-        &self,
-        request: &StreamRevisionRequest,
-        source: &mut dyn std::io::Read,
-        publication_guard: &mut dyn PublicationGuard,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<RepositorySnapshot, StoreError>;
-    fn reserve_workspace(&self) -> Result<CleanupWorkspaceId, StoreError>;
-    fn register_workspace(&self, id: &CleanupWorkspaceId) -> Result<(), StoreError>;
-    fn activate_workspace(&self, id: &CleanupWorkspaceId) -> Result<(), StoreError>;
-    fn unregister_workspace(&self, id: &CleanupWorkspaceId) -> Result<(), StoreError>;
-    fn enroll_device_slot(
-        &self,
-        input: EnrollLocalDeviceSlot,
-    ) -> Result<LocalDeviceSlotRecord, StoreError>;
-    fn disable_device_slot(&self, id: LocalDeviceSlotId) -> Result<LocalDeviceSlotRecord, StoreError>;
-    fn delete_disabled_device_slot(&self, id: LocalDeviceSlotId) -> Result<(), StoreError>;
-}
-
-pub trait PublicationGuard: Send {
-    fn validate(&mut self) -> Result<(), StoreError>;
-}
-
-pub trait ReplicationLease: Send {
-    fn authenticate_bootstrap(&self, bytes: &[u8]) -> Result<AuthenticatedBootstrap, StoreError>;
-    fn authenticate_head(&self, bytes: &[u8]) -> Result<AuthenticatedHead, StoreError>;
-    fn contains_object(&self, id: &ObjectId) -> Result<bool, StoreError>;
-    fn import_authenticated(
-        &self,
-        input: &mut dyn std::io::Read,
-        declared_length: u64,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<ImportedObjectMetadata, StoreError>;
-    fn read_snapshot(&self, id: &ObjectId) -> Result<AuthenticatedSnapshotMetadata, StoreError>;
-    fn read_tree(&self, id: &ObjectId) -> Result<AuthenticatedTreeMetadata, StoreError>;
-    fn read_manifest(&self, id: &ObjectId) -> Result<AuthenticatedManifestMetadata, StoreError>;
-    fn verify_reachable(
-        &self,
-        head: &AuthenticatedHead,
-        observation: BackendObservationFingerprint,
-        operation: ReplicationOperationId,
-        visitor: &mut dyn ReachableObjectVisitor,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<VerifiedReachableHead, StoreError>;
-    fn export_encrypted(
-        &self,
-        id: &ObjectId,
-        output: &mut dyn std::io::Write,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<u64, StoreError>;
-    fn commit_replicated_snapshot(
-        &self,
-        verified: VerifiedReachableHead,
-        input: CommitReplicatedSnapshot,
-    ) -> Result<CommittedReachableHead, StoreError>;
-    fn accept_current_verified(
-        &self,
-        verified: VerifiedReachableHead,
-    ) -> Result<CommittedReachableHead, StoreError>;
-    fn record_trusted_remote(
-        &self,
-        committed: CommittedReachableHead,
-        provenance: TrustedRemoteProvenance,
-    ) -> Result<(), StoreError>;
-}
-
-pub struct BackendObservationFingerprint(Vec<u8>);
-struct VerifiedReachableBinding {
-    vault: VaultId,
-    session_generation: u64,
-    bootstrap_commitment: [u8; 32],
-    head_commitment: [u8; 32],
-    reachable_set_commitment: [u8; 32],
-    effective_limits_commitment: [u8; 32],
-    observation: BackendObservationFingerprint,
-    operation: ReplicationOperationId,
-}
-enum CommittedTransition {
-    FastForward,
-    Reconciled,
-    NoLocalCommit,
-}
-struct CommittedReachableBinding {
-    verified: VerifiedReachableBinding,
-    local_snapshot: SnapshotId,
-    transition: CommittedTransition,
-}
-pub struct VerifiedReachableHead {
-    binding: VerifiedReachableBinding,
-}
-pub struct CommittedReachableHead {
-    binding: CommittedReachableBinding,
-}
-pub struct ReplicationOperationId([u8; 16]);
-
-pub enum TrustedRemoteProvenance {
-    FreshnessProven,
-    FreshnessUnprovableAcknowledged,
-}
-
-pub trait CompromiseRekeySource: Send {
-    fn next_entry(&mut self) -> Result<Option<AuthenticatedLogicalEntry>, StoreError>;
-    fn stream_plaintext(
-        &mut self,
-        entry: &AuthenticatedLogicalEntry,
-        output: &mut dyn std::io::Write,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<u64, StoreError>;
-}
-
-pub trait PendingVaultTarget: Send {
-    fn stage_entry(
-        &mut self,
-        source: &mut dyn std::io::Read,
-        logical_metadata: NewLogicalIdentity,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<StagedTargetEntry, StoreError>;
-    fn verify_complete(&mut self, cancel: &std::sync::atomic::AtomicBool) -> Result<(), StoreError>;
-    fn activate(self: Box<Self>) -> Result<ActivatedVaultTarget, StoreError>;
-    fn abort(self: Box<Self>) -> Result<(), StoreError>;
-}
-
-pub enum ReplicatedCommitMode {
-    FastForward { expected_local: SnapshotId },
-    Reconciled { local: SnapshotId, remote: SnapshotId },
-}
-
-pub struct CommitReplicatedSnapshot {
-    pub mode: ReplicatedCommitMode,
-    pub snapshot_object: ObjectId,
-}
-
-pub trait ReachableObjectVisitor: Send {
-    fn visit(&mut self, object: &ReferencedObjectMetadata) -> Result<(), StoreError>;
-}
-
-pub struct ReplicationLimits {
-    pub max_bootstrap_bytes: u64,
-    pub max_head_bytes: u64,
-    pub max_chunk_object_bytes: u64,
-    pub max_manifest_object_bytes: u64,
-    pub max_tree_object_bytes: u64,
-    pub max_snapshot_object_bytes: u64,
-    pub max_aggregate_bytes: u64,
-    pub max_object_count: u64,
-    pub max_graph_depth: u32,
-    pub max_duration: std::time::Duration,
-    pub progress_interval: std::time::Duration,
-    pub max_quarantine_bytes: u64,
-    pub free_space_reserve_bytes: u64,
-}
-
-pub struct LocalDeviceSlotId([u8; 16]);
-pub struct CleanupWorkspaceId([u8; 16]);
-
-impl LocalDeviceSlotId {
-    pub fn from_random_bytes(bytes: [u8; 16]) -> Self;
-    pub fn as_bytes(&self) -> &[u8; 16];
-}
-
-impl CleanupWorkspaceId {
-    pub fn from_random_bytes(bytes: [u8; 16]) -> Self;
-    pub fn as_bytes(&self) -> &[u8; 16];
-}
-
-pub struct LocalDeviceSlotRecord {
-    pub version: u16,
-    pub id: LocalDeviceSlotId,
-    pub provider: String,
-    pub provider_reference: Vec<u8>,
-    pub wrapped_root_key: Vec<u8>,
-    pub authentication_tag: [u8; 32],
-    pub state: DeviceSlotState,
-}
-
-pub enum DeviceSlotState {
-    Active,
-    DisabledPendingProviderRemoval,
-}
-
-pub struct EnrollLocalDeviceSlot {
-    pub id: LocalDeviceSlotId,
-    pub provider: String,
-    pub provider_reference: Vec<u8>,
-    pub wrapping_key: notecrypt_crypto::DeviceWrappingKey,
-}
-
-pub trait Durability: Send + Sync {
-    fn sync_file(&self, file: &std::fs::File) -> Result<(), StoreError>;
-    fn sync_directory(&self, path: &std::path::Path) -> Result<(), StoreError>;
-    fn replace_atomic(
-        &self,
-        source: &std::path::Path,
-        destination: &std::path::Path,
-    ) -> Result<(), StoreError>;
-    fn capabilities(&self) -> DurabilityCapabilities;
-}
-```
+The implemented Task 6 API is defined by `crates/notecrypt-store/src/lib.rs` and its private capability modules.
+It uses owned `Arc<VaultStore>` sessions, consuming recovery passphrases, opaque local and replication leases, store-generated identities, linear cleanup and device capabilities, bounded `QuarantineImport: Write` sinks, and source-driven `PendingVaultTarget::stage_entry`.
+No public API accepts a durability implementation, raw key, caller-generated storage identity, physical workspace path, claimed replication transition, or compromise target identity.
+`ReplicationLimits` includes independent object, aggregate, edge, depth, duration, progress, quarantine, and free-space bounds, including `max_graph_edges = 100_000`.
+The durability seam is private and sealed inside `notecrypt-platform-fs`.
+It retains verified directory and file handles, supports exact-handle no-replace immutable publication and atomic head replacement from private same-filesystem staging, and probes the actual target filesystem before vault use.
+Linux publishes from the authenticated descriptor through `/proc/self/fd/<held-fd>` with `linkat(..., AT_SYMLINK_FOLLOW)`, unlinks the private staging name before any journal or head can reference the object, and rejects reachable objects whose link count is not one.
+The repository-filesystem capability probe exercises that exact unprivileged operation and fails closed if procfs or the filesystem primitive is unavailable.
+Apple platforms publish an exact-descriptor copy-on-write clone with `fclonefileat` and fail initialization when the repository filesystem does not support that primitive.
+Windows publishes or replaces through `FILE_RENAME_INFO` on the exact opened source handle.
+There is no generic path-rename fallback.
 
 Store key material in one revocable key cell owned by the unlocked capability.
 Local and replication leases reference that cell and never copy root or derived keys into lease-owned storage.
 The store loop checks the session generation, acquires a key guard for one bounded chunk, fingerprints the candidate, drops the guard, compares the same-position previous descriptor, reacquires only the needed keys for fresh encryption, drops the guard, and checks the generation again before accepting the chunk.
+The local streaming transaction borrows prior manifest descriptors in place, fallibly reserves each new descriptor before staging its chunk, and checks a one-byte over-limit sentinel before any chunk beyond the profile limit can enter staging.
 No raw key borrow survives between chunks, and no chunk completed across a generation change may enter a manifest or published revision.
 `commit_streamed_revision` calls `PublicationGuard::validate` after every staged object authenticates and immediately before it writes the journal that can advance the head.
 Every key-required replication operation is available only through the object-safe `ReplicationLease`.
+Only passphrase-authorized initialization or unlock may bind the exact canonical local bootstrap into a replication lease, and `authenticate_bootstrap` accepts only byte-identical remote bytes before recording the commitment.
+Device-only unlock cannot acquire replication authority without that passphrase-authenticated binding.
 Keep `VerifiedReachableBinding` and `CommittedReachableBinding` private to `notecrypt-store`, expose no token constructor or public field, and construct tokens only after the corresponding store-owned verification or commit transition succeeds.
 Make `VerifiedReachableHead`, `CommittedReachableHead`, `CompromiseRekeySource`, and `PendingVaultTarget` non-cloneable, non-serializable, non-formatting, non-defaultable, and bound to the active session generation.
 Bind `VerifiedReachableHead` to the vault, authenticated bootstrap and head, exact reachable identities, effective limits, canonical `BackendObservationFingerprint`, and operation ID.
-Require the consuming sequence `verify_reachable` to either `commit_replicated_snapshot` or `accept_current_verified`, then to consuming `record_trusted_remote`.
-Map a successfully applied `ReplicatedCommitMode` into private `CommittedTransition::FastForward` or `CommittedTransition::Reconciled`, and make `accept_current_verified` construct only `CommittedTransition::NoLocalCommit` after proving the local head is already current.
-Never retain caller-supplied `ReplicatedCommitMode` inside `CommittedReachableBinding`.
-Reject partial traversal, stale generation, changed limits, changed observation, changed operation, duplicate use, or unmatched provenance before local or trusted-remote state changes.
+Require `verify_reachable` to prove the prior exact trusted remote locator is equal to or an authenticated ancestor of the observed remote before it can produce a proof.
+Fast-forward and exact-current flows consume that proof into `CommittedReachableHead`, then into `record_trusted_remote`.
+Reconciliation consumes it into `PendingRemotePublication`, and only a fresh post-push authenticated readback of the exact merged head converts that capability into a recordable observation.
+Construct private `CommittedTransition::FastForward` only after authenticated ancestry contains the exact local snapshot locator and head binding.
+Construct private `CommittedTransition::Reconciled` only after the complete authenticated candidate graph has exactly two root parents equal to the exact current local and verified remote locators.
+Make `accept_current_verified` construct only `CommittedTransition::NoLocalCommit` after proving the complete authenticated local head is already current.
+No caller mode selects a private transition.
+Reject partial traversal, stale generation, changed limits, changed observation, changed operation, duplicate use, cross-lease or cross-vault tokens, remote rollback, or unmatched provenance before local or trusted-remote state changes.
 Use Trybuild callers outside the store crate to prove construction, clone, serialization, and debug formatting fail for both proof types.
 Use runtime tests to prove token reuse and every vault, generation, bootstrap, head, reachable-set, limits, observation, operation, and provenance mismatch fail closed.
-Behind the development-only `test-support` feature, expose a scripted repository that accepts test graph inputs but obtains proof tokens only by executing the same private store verification and transition code as production.
-Do not expose a token factory or binding constructor through `test-support`.
-Let the scripted repository request a replay attempt by prior operation ID so the store can exercise its spent-token registry without returning or reconstructing a token.
+Development tests drive the production replication lease with canonical encrypted graphs and never expose a proof-token factory or binding constructor through `test-support`.
+Replay tests submit a prior internal operation ID to the store-owned spent-operation registry without returning or reconstructing a token.
 `PendingVaultTarget` uses a distinct empty target and all-new vault, root, recovery, logical, revision, and object identities, cleans staged state on abort or drop, activates only after complete verification, and cannot be reused after abort or activation.
 Reject source and target aliasing and any old identity, object, parent, or history in target staging.
 Keep all raw `VaultStore` helpers crate-private.
@@ -1079,7 +892,11 @@ Assert that generation changes prevent any affected descriptor, manifest, snapsh
 - [ ] **Step 4: Implement transaction commit and recovery**
 
 Implement the ten-step transaction order from the design specification.
-Implement Unix and macOS durability with file and directory synchronization plus same-filesystem rename.
+Implement Linux exact-descriptor no-replace publication through `/proc/self/fd/<held-fd>` with `linkat(..., AT_SYMLINK_FOLLOW)`, Apple exact-descriptor copy-on-write publication with `fclonefileat`, and explicit file and directory synchronization.
+For mutable Unix and Apple replacement, retain the authenticated source handle, use unpredictable names in a verified private `0700` staging directory under the OS mutation lock, identity-check source and destination immediately before atomic path replacement, and reopen plus authenticate the destination immediately afterward.
+An operating-system administrator or actively malicious same-UID process racing the final path syscall is outside this guarantee because the host API offers no replace-existing operation from an already-open source descriptor.
+Treat Linux link-before-unlink as transient unpublished state, reject link count other than one from reachable reads, and clean it during recovery before any journal or head reference can make the object reachable.
+Fail initialization when the exact platform publication primitive is unavailable rather than falling back to a path rename.
 Implement Windows durability with explicit file flush and replace semantics behind `windows-sys`.
 Expose capability differences and fail vault initialization if the required head-replacement guarantee is unavailable.
 Use a deterministic fake to inject every crash-test failure point.
@@ -1095,8 +912,13 @@ After passphrase unlock, derive the key and verify all existing trusted records 
 During device unlock, unwrap the root key with the OS-protected key first, derive the local-verification key, and then verify the complete slot record and trusted state before exposing an unlocked capability.
 Treat records returned by locked `list_device_slots` as untrusted candidates and use their provider references only to attempt authenticated root-key unwrap.
 Treat local-record authentication failure as `StoreError::LocalStateAuthenticationFailed`, refuse device-slot use, and require passphrase recovery plus explicit local-state repair.
+Passphrase repair returns an opaque linear repair-only capability only after authenticating the bootstrap, exact current head, and complete reachable repository graph without trusting local records.
+Its explicit `RebuildTrustedHead` action rereads and reauthenticates the exact authorized graph under the mutation lock, durably reconstructs only trusted head under publication authorization, exposes no ordinary unlocked operations, and requires a fresh unlock afterward.
 Return `StoreError::RollbackDetected` before modifying state when a presented head is behind or excludes the trusted snapshot.
 Authenticate registered and active cleanup states plus trusted remote observations with distinct profile-1 local-verification labels.
+Configure cleanup removal once through a trusted `WorkspaceAbsenceAuthority`; the adapter verifier returns an opaque held absence guard, and the store binds the resulting proof to private authority identity plus exact workspace, vault, generation, and record commitment.
+Never accept a per-call boolean, path, or callback as absence evidence.
+Acquire the adapter guard before the immediate mutation and publication boundary, retain it through exact authenticated removal, and consume the mutable active capability only after durable success.
 Record a trusted remote observation atomically only after the replication lease has authenticated the head and traversed the complete reachable graph within budget.
 
 Exercise infinite inventory, trickle reads, every oversized object kind, excessive object count, excessive graph depth, aggregate-byte exhaustion, timeout, disk-budget exhaustion, cancellation, and lock.
@@ -1108,10 +930,14 @@ Exercise startup base enumeration, reserve/register/activate/remove/unregister f
 - [ ] **Step 6: Benchmark transaction overhead**
 
 Measure object publication separately from cryptography for 1 KiB, 1 MiB, 100 MiB, 10,000 tiny objects, cold cache, and warm cache.
+Run the feature-gated production `DurableBatch` benchmark entry rather than calling platform primitives directly.
+Define cold as the first measured publication in a newly initialized repository without claiming that operating-system caches were forcibly dropped.
+Define warm as repeated equivalent publications through the same store, capabilities, filesystem, and process.
+Report staging, file flush, authentication, exact publication, directory flush, cleanup, total time, throughput, synchronization counts, platform method, bounded copy buffers, batch-metadata accounting, and retained payload bytes as machine-readable JSON.
 
 - [ ] **Step 7: Verify and commit**
 
-Run: `cargo test -p notecrypt-store --test transaction_faults --test rollback --test chunk_revocation --test cleanup_lifecycle --test replication_limits --test reachability_tokens --test compromise_capabilities && cargo bench -p notecrypt-benches --bench store`
+Run: `cargo test -p notecrypt-store --features test-support --locked --test transaction_faults --test rollback --test chunk_revocation --test cleanup_lifecycle --test replication_limits --test reachability_tokens --test compromise_capabilities && cargo bench -p notecrypt-benches --bench store --release --locked`
 
 Expected: all fault points recover to a valid authenticated head, revoked chunks never publish, proof tokens cannot be forged or reused, the test-support seam runs production verification, replication budgets clean quarantine, and cleanup remains confined to the fixed base.
 
@@ -1592,7 +1418,10 @@ pub trait WorkspaceProvider: Send + Sync {
         token: &StableSourceToken,
     ) -> Result<(), HostPortError>;
     fn remove_workspace(&self, lease: &WorkspaceLease) -> Result<(), HostPortError>;
-    fn workspace_absent(&self, id: &WorkspaceId) -> Result<bool, HostPortError>;
+    fn acquire_verified_absence(
+        &self,
+        id: &WorkspaceId,
+    ) -> Result<Box<dyn WorkspaceAbsenceGuard>, HostPortError>;
 }
 
 impl ServiceHandle {
@@ -1855,7 +1684,7 @@ Implement `WorkspaceProvider` and `WorkspaceWatch` from `notecrypt-service` with
 Consume a store-reserved ID, let the store authenticate registered state, create only the derived fixed-base child, verify restrictive permissions, let the store activate the record, and write no plaintext before activation.
 Hold the short-lived base lock while creating the child and acquiring its ownership lock, keep the ownership guard inside `WorkspaceLease` for the complete plaintext lifetime, and release it only after verified removal.
 Cleanup holds the base lock and attempts ownership locks non-blockingly, skips held live workspaces without failure, and deletes only after acquiring ownership.
-On cleanup remove without following links, verify absence through the provider, and let the store unregister only after that proof.
+On cleanup remove without following links, acquire a held absence guard through the once-configured trusted provider authority, and let the store unregister only while that opaque proof remains alive.
 Keep enumeration and cleanup-record authentication in the store, not the adapter.
 Implement staged materialization, atomic publication, suppression-token correlation, and explicit path arming before exposing the adapter to whole-vault orchestration.
 Return `HostPortError` categories without leaking operating-system paths into default diagnostics.
@@ -2231,15 +2060,17 @@ Treat `StoreError::Locked` as cancellation and never retain a raw `VaultStore` h
 Begin a backend publication with the observed head version, stream missing immutable objects through bounded `stage_object` calls, and commit the authenticated replacement head.
 Treat a stale publication result as a refetch and reconciliation retry.
 Treat an indeterminate publication result by rereading the remote head and authenticating it before deciding whether the attempted replacement committed or needs reconciliation.
-Convert the backend observation into bounded canonical `BackendObservationFingerprint` bytes, call `verify_reachable`, consume its `VerifiedReachableHead` through either `commit_replicated_snapshot` or `accept_current_verified`, then consume `CommittedReachableHead` through `record_trusted_remote`.
+Convert the backend observation into bounded canonical `BackendObservationFingerprint` bytes and call `verify_reachable`.
+Consume `VerifiedReachableHead` through `commit_replicated_snapshot` or `accept_current_verified`, then consume `CommittedReachableHead` through `record_trusted_remote`.
+Reconciliation instead returns `PendingRemotePublication`; only a fresh lease that authenticates the exact post-push remote head and complete graph may convert it to `CommittedReachableHead` before trusted-remote recording.
 Verify the bootstrap, published head, and complete reachable graph through independent readback before beginning this linear sequence or reporting sync success.
 Reject partial, stale, differently limited, differently observed, differently identified, revoked, or reused proofs without advancing local or trusted-remote state.
 Remove quarantine on cancellation, lock, timeout, stalled trickle input, authentication failure, or any limit failure.
 
 For a clean device, return `RecoveryFreshness::UnprovableOnCleanDevice` after graph verification and before `record_trusted_remote` establishes the first baseline.
 Keep `RecoveryFreshness::Proven`, `RecoveryFreshness::UnprovableOnCleanDevice`, and `RollbackDetected` as distinct typed outcomes.
-Pause the exact service operation at this post-authentication gate and require `begin_freshness_acknowledgement` to return its generation-bound pending capability and safe explanatory DTO.
-Only consuming `acknowledge_unprovable_freshness` may resume the operation with `TrustedRemoteProvenance::FreshnessUnprovableAcknowledged`; cancel, drop, or mismatch fails closed and consumes no proof into trusted state.
+Pause the exact service operation at this post-authentication gate when `record_trusted_remote` returns `PendingUnprovableRemote`.
+Only consuming `acknowledge_unprovable_remote` may resume the operation and persist the acknowledged baseline; cancel, drop, or mismatch fails closed and consumes no proof into trusted state.
 
 ```rust
 pub enum RecoveryFreshness {

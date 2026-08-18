@@ -1,0 +1,10 @@
+error[E0382]: use of moved value: `enrollment`
+  --> tests/compile_fail/device_reuse.rs:21:34
+   |
+15 |     let enrollment = DeviceEnrollment::new(
+   |         ---------- move occurs because `enrollment` has type `DeviceEnrollment`, which does not implement the `Copy` trait
+...
+20 |     let _first = registry.enroll(enrollment).unwrap();
+   |                                  ---------- value moved here
+21 |     let _reuse = registry.enroll(enrollment).unwrap();
+   |                                  ^^^^^^^^^^ value used here after move

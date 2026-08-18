@@ -29,10 +29,10 @@ pub use object::{
     encode_snapshot_object,
 };
 pub use snapshot::{
-    HeadPayload, LocalRecordType, LocalStatePayload, LogicalTree, PriorEntryKind, SnapshotPayload,
-    TreeEntry, decode_head_payload, decode_local_state_payload, decode_snapshot_payload,
-    decode_tree, encode_head_payload, encode_local_state_payload, encode_snapshot_payload,
-    encode_tree,
+    HeadPayload, LocalRecordType, LocalStatePayload, LogicalTree, PriorEntryKind, RevisionLocator,
+    SnapshotParentLocator, SnapshotPayload, TreeEntry, decode_head_payload,
+    decode_local_state_payload, decode_snapshot_payload, decode_tree, encode_head_payload,
+    encode_local_state_payload, encode_snapshot_payload, encode_tree,
 };
 
 /// Version one of the durable vault format.

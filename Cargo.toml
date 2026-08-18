@@ -4,6 +4,7 @@ members = [
     "crates/notecrypt-core",
     "crates/notecrypt-format",
     "crates/notecrypt-crypto",
+    "crates/notecrypt-platform-fs",
     "crates/notecrypt-store",
     "crates/notecrypt-backend",
     "crates/notecrypt-replication",
@@ -30,6 +31,8 @@ publish = false
 argon2 = { version = "0.5", features = ["zeroize"] }
 bip39 = { version = "2.2", default-features = false, features = ["std", "zeroize"] }
 blake3 = { version = "1.8", features = ["zeroize"] }
+cap-fs-ext = "4.0.2"
+cap-std = "4.0.2"
 chacha20poly1305 = "0.10"
 clap = "4.5"
 criterion = "0.7"
@@ -43,6 +46,7 @@ notify = "8.2"
 proptest = "1.7"
 ratatui = "0.29"
 rpassword = "7.4"
+rustix = { version = "1.1.4", features = ["fs"] }
 secrecy = "0.10"
 serde = "1.0"
 serde_json = "1.0"
@@ -65,6 +69,7 @@ notecrypt-crypto = { path = "crates/notecrypt-crypto", version = "=0.1.0" }
 notecrypt-device-unlock = { path = "adapters/notecrypt-device-unlock", version = "=0.1.0" }
 notecrypt-editor-workspace = { path = "adapters/notecrypt-editor-workspace", version = "=0.1.0" }
 notecrypt-format = { path = "crates/notecrypt-format", version = "=0.1.0" }
+notecrypt-platform-fs = { path = "crates/notecrypt-platform-fs", version = "=0.1.0" }
 notecrypt-replication = { path = "crates/notecrypt-replication", version = "=0.1.0" }
 notecrypt-service = { path = "crates/notecrypt-service", version = "=0.1.0" }
 notecrypt-store = { path = "crates/notecrypt-store", version = "=0.1.0" }

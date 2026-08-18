@@ -235,44 +235,11 @@ fn write_sparse_file(
     Ok(())
 }
 
-#[cfg(not(windows))]
-fn mark_sparse_file(_file: &File, _path: &Path) -> Result<(), CorpusError> {
-    Ok(())
-}
-
-#[cfg(windows)]
-#[allow(unsafe_code)]
 fn mark_sparse_file(file: &File, path: &Path) -> Result<(), CorpusError> {
-    use std::os::windows::io::AsRawHandle;
-    use std::ptr;
-
-    use windows_sys::Win32::System::IO::DeviceIoControl;
-    use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
-
-    let mut bytes_returned = 0_u32;
-    // SAFETY: The file owns a valid handle for the duration of the call.
-    // Microsoft documents null input and output buffers for setting the sparse flag.
-    let succeeded = unsafe {
-        DeviceIoControl(
-            file.as_raw_handle(),
-            FSCTL_SET_SPARSE,
-            ptr::null(),
-            0,
-            ptr::null_mut(),
-            0,
-            &mut bytes_returned,
-            ptr::null_mut(),
-        )
-    };
-
-    if succeeded == 0 {
-        return Err(CorpusError::Io {
-            path: path.to_path_buf(),
-            source: io::Error::last_os_error(),
-        });
-    }
-
-    Ok(())
+    notecrypt_platform_fs::mark_sparse_file(file).map_err(|source| CorpusError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn write_rename_save_fixtures(

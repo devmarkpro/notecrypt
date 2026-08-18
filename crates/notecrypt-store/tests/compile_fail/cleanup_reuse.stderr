@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `registered`
+  --> tests/compile_fail/cleanup_reuse.rs:14:37
+   |
+12 |     let registered = registry.reserve_and_register().unwrap();
+   |         ---------- move occurs because `registered` has type `RegisteredWorkspace`, which does not implement the `Copy` trait
+13 |     let _active = registry.activate(registered).unwrap();
+   |                                     ---------- value moved here
+14 |     let _reused = registry.activate(registered).unwrap();
+   |                                     ^^^^^^^^^^ value used here after move

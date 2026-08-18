@@ -1,0 +1,99 @@
+error[E0277]: can't compare `RegisteredWorkspace` with `RegisteredWorkspace`
+ --> tests/compile_fail/cleanup_equality.rs:9:25
+  |
+9 |     assert_partial_eq::<RegisteredWorkspace>();
+  |                         ^^^^^^^^^^^^^^^^^^^ no implementation for `RegisteredWorkspace == RegisteredWorkspace`
+  |
+  = help: the trait `PartialEq` is not implemented for `RegisteredWorkspace`
+note: required by a bound in `assert_partial_eq`
+ --> tests/compile_fail/cleanup_equality.rs:5:25
+  |
+5 | fn assert_partial_eq<T: PartialEq>() {}
+  |                         ^^^^^^^^^ required by this bound in `assert_partial_eq`
+
+error[E0277]: can't compare `ActiveWorkspace` with `ActiveWorkspace`
+  --> tests/compile_fail/cleanup_equality.rs:10:25
+   |
+10 |     assert_partial_eq::<ActiveWorkspace>();
+   |                         ^^^^^^^^^^^^^^^ no implementation for `ActiveWorkspace == ActiveWorkspace`
+   |
+   = help: the trait `PartialEq` is not implemented for `ActiveWorkspace`
+note: required by a bound in `assert_partial_eq`
+  --> tests/compile_fail/cleanup_equality.rs:5:25
+   |
+ 5 | fn assert_partial_eq<T: PartialEq>() {}
+   |                         ^^^^^^^^^ required by this bound in `assert_partial_eq`
+
+error[E0277]: can't compare `AuthenticatedCleanupRecord` with `AuthenticatedCleanupRecord`
+  --> tests/compile_fail/cleanup_equality.rs:11:25
+   |
+11 |     assert_partial_eq::<AuthenticatedCleanupRecord>();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `AuthenticatedCleanupRecord == AuthenticatedCleanupRecord`
+   |
+   = help: the trait `PartialEq` is not implemented for `AuthenticatedCleanupRecord`
+note: required by a bound in `assert_partial_eq`
+  --> tests/compile_fail/cleanup_equality.rs:5:25
+   |
+ 5 | fn assert_partial_eq<T: PartialEq>() {}
+   |                         ^^^^^^^^^ required by this bound in `assert_partial_eq`
+
+error[E0277]: can't compare `WorkspaceAbsenceProof` with `WorkspaceAbsenceProof`
+  --> tests/compile_fail/cleanup_equality.rs:12:25
+   |
+12 |     assert_partial_eq::<WorkspaceAbsenceProof>();
+   |                         ^^^^^^^^^^^^^^^^^^^^^ no implementation for `WorkspaceAbsenceProof == WorkspaceAbsenceProof`
+   |
+   = help: the trait `PartialEq` is not implemented for `WorkspaceAbsenceProof`
+note: required by a bound in `assert_partial_eq`
+  --> tests/compile_fail/cleanup_equality.rs:5:25
+   |
+ 5 | fn assert_partial_eq<T: PartialEq>() {}
+   |                         ^^^^^^^^^ required by this bound in `assert_partial_eq`
+
+error[E0277]: the trait bound `RegisteredWorkspace: Eq` is not satisfied
+  --> tests/compile_fail/cleanup_equality.rs:13:17
+   |
+13 |     assert_eq::<RegisteredWorkspace>();
+   |                 ^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `RegisteredWorkspace`
+   |
+note: required by a bound in `assert_eq`
+  --> tests/compile_fail/cleanup_equality.rs:6:17
+   |
+ 6 | fn assert_eq<T: Eq>() {}
+   |                 ^^ required by this bound in `assert_eq`
+
+error[E0277]: the trait bound `ActiveWorkspace: Eq` is not satisfied
+  --> tests/compile_fail/cleanup_equality.rs:14:17
+   |
+14 |     assert_eq::<ActiveWorkspace>();
+   |                 ^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `ActiveWorkspace`
+   |
+note: required by a bound in `assert_eq`
+  --> tests/compile_fail/cleanup_equality.rs:6:17
+   |
+ 6 | fn assert_eq<T: Eq>() {}
+   |                 ^^ required by this bound in `assert_eq`
+
+error[E0277]: the trait bound `AuthenticatedCleanupRecord: Eq` is not satisfied
+  --> tests/compile_fail/cleanup_equality.rs:15:17
+   |
+15 |     assert_eq::<AuthenticatedCleanupRecord>();
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `AuthenticatedCleanupRecord`
+   |
+note: required by a bound in `assert_eq`
+  --> tests/compile_fail/cleanup_equality.rs:6:17
+   |
+ 6 | fn assert_eq<T: Eq>() {}
+   |                 ^^ required by this bound in `assert_eq`
+
+error[E0277]: the trait bound `WorkspaceAbsenceProof: Eq` is not satisfied
+  --> tests/compile_fail/cleanup_equality.rs:16:17
+   |
+16 |     assert_eq::<WorkspaceAbsenceProof>();
+   |                 ^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `WorkspaceAbsenceProof`
+   |
+note: required by a bound in `assert_eq`
+  --> tests/compile_fail/cleanup_equality.rs:6:17
+   |
+ 6 | fn assert_eq<T: Eq>() {}
+   |                 ^^ required by this bound in `assert_eq`

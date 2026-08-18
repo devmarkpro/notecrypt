@@ -8,6 +8,68 @@ use crate::object::{
 use crate::{DecodeLimits, FORMAT_VERSION_V1, FormatError};
 
 #[derive(PartialEq, Eq)]
+pub struct RevisionLocator {
+    revision_id: [u8; 32],
+    manifest_object_id: [u8; 32],
+}
+
+impl RevisionLocator {
+    #[must_use]
+    pub const fn new(revision_id: [u8; 32], manifest_object_id: [u8; 32]) -> Self {
+        Self {
+            revision_id,
+            manifest_object_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn revision_id(&self) -> &[u8; 32] {
+        &self.revision_id
+    }
+
+    #[must_use]
+    pub const fn manifest_object_id(&self) -> &[u8; 32] {
+        &self.manifest_object_id
+    }
+
+    #[must_use]
+    pub const fn into_parts(self) -> ([u8; 32], [u8; 32]) {
+        (self.revision_id, self.manifest_object_id)
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub struct SnapshotParentLocator {
+    snapshot_id: [u8; 32],
+    snapshot_object_id: [u8; 32],
+}
+
+impl SnapshotParentLocator {
+    #[must_use]
+    pub const fn new(snapshot_id: [u8; 32], snapshot_object_id: [u8; 32]) -> Self {
+        Self {
+            snapshot_id,
+            snapshot_object_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn snapshot_id(&self) -> &[u8; 32] {
+        &self.snapshot_id
+    }
+
+    #[must_use]
+    pub const fn snapshot_object_id(&self) -> &[u8; 32] {
+        &self.snapshot_object_id
+    }
+
+    #[must_use]
+    pub const fn into_parts(self) -> ([u8; 32], [u8; 32]) {
+        (self.snapshot_id, self.snapshot_object_id)
+    }
+}
+
+#[derive(PartialEq, Eq)]
 pub enum TreeEntry {
     Root {
         id: [u8; 16],
@@ -16,7 +78,7 @@ pub enum TreeEntry {
         id: [u8; 16],
         parent: [u8; 16],
         name: String,
-        revision: [u8; 32],
+        locator: RevisionLocator,
     },
     Directory {
         id: [u8; 16],
@@ -29,7 +91,7 @@ pub enum TreeEntry {
         name: String,
         deleted_in: [u8; 32],
         prior_kind: PriorEntryKind,
-        last_revision: Option<[u8; 32]>,
+        last_revision: Option<RevisionLocator>,
     },
 }
 
@@ -59,7 +121,7 @@ impl TreeEntry {
         id: [u8; 16],
         parent: [u8; 16],
         name: &str,
-        revision: [u8; 32],
+        locator: RevisionLocator,
         limits: &DecodeLimits,
     ) -> Result<Self, FormatError> {
         validate_name(name, limits)?;
@@ -67,7 +129,7 @@ impl TreeEntry {
             id,
             parent,
             name: copy_owned_name(name)?,
-            revision,
+            locator,
         })
     }
     pub fn directory(
@@ -89,7 +151,7 @@ impl TreeEntry {
         name: &str,
         deleted_in: [u8; 32],
         prior_kind: PriorEntryKind,
-        last_revision: Option<[u8; 32]>,
+        last_revision: Option<RevisionLocator>,
         limits: &DecodeLimits,
     ) -> Result<Self, FormatError> {
         validate_name(name, limits)?;
@@ -196,7 +258,7 @@ pub fn encode_tree(value: &LogicalTree) -> Result<Vec<u8>, FormatError> {
 }
 
 pub fn decode_tree(bytes: &[u8], limits: &DecodeLimits) -> Result<LogicalTree, FormatError> {
-    require_depth(limits, 3)?;
+    require_depth(limits, 4)?;
     check_input_bound(bytes, u64::from(limits.max_tree_bytes))?;
     let mut decoder = Decoder::new(bytes);
     require_array(&mut decoder, 3)?;
@@ -262,7 +324,7 @@ fn encode_tree_entry<W: minicbor::encode::Write>(
             id,
             parent,
             name,
-            revision,
+            locator,
         } => {
             encoder
                 .array(5)?
@@ -270,7 +332,9 @@ fn encode_tree_entry<W: minicbor::encode::Write>(
                 .bytes(id)?
                 .bytes(parent)?
                 .str(name)?
-                .bytes(revision)?;
+                .array(2)?
+                .bytes(locator.revision_id())?
+                .bytes(locator.manifest_object_id())?;
         }
         TreeEntry::Directory { id, parent, name } => {
             encoder
@@ -296,8 +360,11 @@ fn encode_tree_entry<W: minicbor::encode::Write>(
                 .str(name)?
                 .bytes(deleted_in)?
                 .u8(*prior_kind as u8)?;
-            if let Some(revision) = last_revision {
-                encoder.bytes(revision)?;
+            if let Some(locator) = last_revision {
+                encoder
+                    .array(2)?
+                    .bytes(locator.revision_id())?
+                    .bytes(locator.manifest_object_id())?;
             } else {
                 encoder.null()?;
             }
@@ -329,12 +396,14 @@ fn decode_tree_entry(
         1 => {
             let parent = fixed_bytes::<16>(decoder.bytes()?)?;
             let name = decoder.str()?;
-            let revision = fixed_bytes::<32>(decoder.bytes()?)?;
+            require_array(decoder, 2)?;
+            let revision_id = fixed_bytes::<32>(decoder.bytes()?)?;
+            let manifest_object_id = fixed_bytes::<32>(decoder.bytes()?)?;
             Ok(TreeEntry::File {
                 id,
                 parent,
                 name: copy_name(name, limits, allocation)?,
-                revision,
+                locator: RevisionLocator::new(revision_id, manifest_object_id),
             })
         }
         2 => {
@@ -351,7 +420,11 @@ fn decode_tree_entry(
                 decoder.null()?;
                 None
             } else {
-                Some(fixed_bytes::<32>(decoder.bytes()?)?)
+                require_array(decoder, 2)?;
+                Some(RevisionLocator::new(
+                    fixed_bytes::<32>(decoder.bytes()?)?,
+                    fixed_bytes::<32>(decoder.bytes()?)?,
+                ))
             };
             if (prior_kind == PriorEntryKind::File) != last_revision.is_some() {
                 return Err(FormatError::Malformed);
@@ -409,7 +482,7 @@ fn copy_owned_name(name: &str) -> Result<String, FormatError> {
 #[derive(PartialEq, Eq)]
 pub struct SnapshotPayload {
     snapshot_id: [u8; 32],
-    parents: Vec<[u8; 32]>,
+    parents: Vec<SnapshotParentLocator>,
     tree_object_id: [u8; 32],
     device_id: [u8; 16],
     device_label: String,
@@ -418,7 +491,7 @@ pub struct SnapshotPayload {
 impl SnapshotPayload {
     pub fn try_new(
         snapshot_id: [u8; 32],
-        mut parents: Vec<[u8; 32]>,
+        mut parents: Vec<SnapshotParentLocator>,
         tree_object_id: [u8; 32],
         device_id: [u8; 16],
         device_label: &str,
@@ -426,7 +499,7 @@ impl SnapshotPayload {
     ) -> Result<Self, FormatError> {
         let parent_bytes = parents
             .len()
-            .checked_mul(std::mem::size_of::<[u8; 32]>())
+            .checked_mul(std::mem::size_of::<SnapshotParentLocator>())
             .ok_or(FormatError::Overflow)?;
         let aggregate = parent_bytes
             .checked_add(device_label.len())
@@ -438,8 +511,20 @@ impl SnapshotPayload {
         {
             return Err(FormatError::LimitExceeded);
         }
-        parents.sort_unstable();
-        if parents.windows(2).any(|w| w[0] == w[1]) {
+        parents.sort_unstable_by(|left, right| {
+            left.snapshot_id
+                .cmp(&right.snapshot_id)
+                .then_with(|| left.snapshot_object_id.cmp(&right.snapshot_object_id))
+        });
+        if parents
+            .windows(2)
+            .any(|w| w[0].snapshot_id == w[1].snapshot_id)
+            || parents.iter().enumerate().any(|(index, parent)| {
+                parents[index + 1..]
+                    .iter()
+                    .any(|other| parent.snapshot_object_id == other.snapshot_object_id)
+            })
+        {
             return Err(FormatError::Malformed);
         }
         let mut label = String::new();
@@ -456,8 +541,28 @@ impl SnapshotPayload {
         })
     }
     #[must_use]
+    pub const fn snapshot_id(&self) -> &[u8; 32] {
+        &self.snapshot_id
+    }
+    #[must_use]
+    pub fn parents(&self) -> &[SnapshotParentLocator] {
+        &self.parents
+    }
+    #[must_use]
+    pub const fn tree_object_id(&self) -> &[u8; 32] {
+        &self.tree_object_id
+    }
+    #[must_use]
     #[allow(clippy::type_complexity)]
-    pub fn into_parts(mut self) -> ([u8; 32], Vec<[u8; 32]>, [u8; 32], [u8; 16], String) {
+    pub fn into_parts(
+        mut self,
+    ) -> (
+        [u8; 32],
+        Vec<SnapshotParentLocator>,
+        [u8; 32],
+        [u8; 16],
+        String,
+    ) {
         (
             self.snapshot_id,
             std::mem::take(&mut self.parents),
@@ -494,7 +599,10 @@ fn encode_snapshot_payload_to<W: minicbor::encode::Write>(
         .bytes(&value.snapshot_id)?
         .array(u64::try_from(value.parents.len()).map_err(|_| FormatError::Overflow)?)?;
     for parent in &value.parents {
-        encoder.bytes(parent)?;
+        encoder
+            .array(2)?
+            .bytes(parent.snapshot_id())?
+            .bytes(parent.snapshot_object_id())?;
     }
     encoder
         .bytes(&value.tree_object_id)?
@@ -507,7 +615,7 @@ pub fn decode_snapshot_payload(
     bytes: &[u8],
     limits: &DecodeLimits,
 ) -> Result<SnapshotPayload, FormatError> {
-    require_depth(limits, 3)?;
+    require_depth(limits, 4)?;
     check_input_bound(bytes, u64::from(limits.max_snapshot_bytes))?;
     let mut d = Decoder::new(bytes);
     require_array(&mut d, 6)?;
@@ -523,7 +631,11 @@ pub fn decode_snapshot_payload(
         .try_reserve_exact(count)
         .map_err(|_| FormatError::AllocationFailed)?;
     for _ in 0..count {
-        parents.push(fixed_bytes::<32>(d.bytes()?)?);
+        require_array(&mut d, 2)?;
+        parents.push(SnapshotParentLocator::new(
+            fixed_bytes::<32>(d.bytes()?)?,
+            fixed_bytes::<32>(d.bytes()?)?,
+        ));
     }
     let tree = fixed_bytes::<32>(d.bytes()?)?;
     let device = fixed_bytes::<16>(d.bytes()?)?;
@@ -615,6 +727,8 @@ pub enum LocalRecordType {
     BackendCopy = 3,
     Cleanup = 4,
     DeviceSlot = 5,
+    Journal = 6,
+    VaultAvailability = 7,
 }
 impl TryFrom<u8> for LocalRecordType {
     type Error = FormatError;
@@ -625,6 +739,8 @@ impl TryFrom<u8> for LocalRecordType {
             3 => Ok(Self::BackendCopy),
             4 => Ok(Self::Cleanup),
             5 => Ok(Self::DeviceSlot),
+            6 => Ok(Self::Journal),
+            7 => Ok(Self::VaultAvailability),
             _ => Err(FormatError::Malformed),
         }
     }

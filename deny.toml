@@ -28,6 +28,8 @@ exceptions = [
     { allow = ["BlueOak-1.0.0"], crate = "minicbor@0.26.5" },
     # RustCrypto uses subtle for constant-time cryptographic operations.
     { allow = ["BSD-3-Clause"], crate = "subtle@2.6.1" },
+    # cap-std uses winx for capability-safe Windows filesystem operations.
+    { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "winx@0.36.4" },
 ]
 
 [licenses.private]

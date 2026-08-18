@@ -1,10 +1,11 @@
 use minicbor::Encoder;
 use notecrypt_format::{
     ChunkDescriptor, ContentPayload, DecodeLimits, FormatError, HeadPayload, LocalRecordType,
-    LocalStatePayload, LogicalTree, RevisionManifest, SnapshotPayload, TreeEntry,
-    decode_content_payload, decode_head_payload, decode_local_state_payload, decode_manifest,
-    decode_snapshot_payload, decode_tree, encode_content_payload, encode_head_payload,
-    encode_local_state_payload, encode_manifest, encode_snapshot_payload, encode_tree,
+    LocalStatePayload, LogicalTree, RevisionLocator, RevisionManifest, SnapshotParentLocator,
+    SnapshotPayload, TreeEntry, decode_content_payload, decode_head_payload,
+    decode_local_state_payload, decode_manifest, decode_snapshot_payload, decode_tree,
+    encode_content_payload, encode_head_payload, encode_local_state_payload, encode_manifest,
+    encode_snapshot_payload, encode_tree,
 };
 
 #[test]
@@ -74,7 +75,11 @@ fn tree_decoder_rejects_attacker_order_instead_of_sorting() {
         .unwrap()
         .str("earlier")
         .unwrap()
+        .array(2)
+        .unwrap()
         .bytes(&[3; 32])
+        .unwrap()
+        .bytes(&[4; 32])
         .unwrap();
     assert!(matches!(
         decode_tree(&encoder.into_writer(), &DecodeLimits::PHASE_1),
@@ -86,7 +91,14 @@ fn tree_decoder_rejects_attacker_order_instead_of_sorting() {
 fn tree_snapshot_head_and_local_payloads_are_canonical() {
     let entries = vec![
         TreeEntry::root([1; 16]),
-        TreeEntry::file([2; 16], [1; 16], "note.md", [3; 32], &DecodeLimits::PHASE_1).unwrap(),
+        TreeEntry::file(
+            [2; 16],
+            [1; 16],
+            "note.md",
+            RevisionLocator::new([3; 32], [9; 32]),
+            &DecodeLimits::PHASE_1,
+        )
+        .unwrap(),
     ];
     let tree = LogicalTree::try_new([1; 16], entries, &DecodeLimits::PHASE_1).unwrap();
     let bytes = encode_tree(&tree).unwrap();
@@ -97,7 +109,10 @@ fn tree_snapshot_head_and_local_payloads_are_canonical() {
 
     let snapshot = SnapshotPayload::try_new(
         [4; 32],
-        vec![[5; 32], [6; 32]],
+        vec![
+            SnapshotParentLocator::new([5; 32], [0x15; 32]),
+            SnapshotParentLocator::new([6; 32], [0x16; 32]),
+        ],
         [7; 32],
         [8; 16],
         "device",
@@ -133,6 +148,39 @@ fn tree_snapshot_head_and_local_payloads_are_canonical() {
         .unwrap(),
         bytes
     );
+}
+
+#[test]
+fn journal_and_vault_availability_have_distinct_frozen_local_record_domains() {
+    let journal = LocalStatePayload::try_new(
+        LocalRecordType::Journal,
+        [0x66; 32],
+        b"bounded-journal-transition".to_vec(),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
+    let encoded = encode_local_state_payload(&journal).unwrap();
+    assert_eq!(encoded[2], 6, "Journal must retain its frozen type value");
+
+    let availability = LocalStatePayload::try_new(
+        LocalRecordType::VaultAvailability,
+        [0x67; 32],
+        b"inactive-or-active".to_vec(),
+        &DecodeLimits::PHASE_1,
+    )
+    .unwrap();
+    let availability = encode_local_state_payload(&availability).unwrap();
+    assert_eq!(
+        availability[2], 7,
+        "VaultAvailability must retain its frozen type value"
+    );
+
+    let mut unknown = encoded;
+    unknown[2] = 8;
+    assert!(matches!(
+        decode_local_state_payload(&unknown, &DecodeLimits::PHASE_1),
+        Err(FormatError::Malformed)
+    ));
 }
 
 #[test]

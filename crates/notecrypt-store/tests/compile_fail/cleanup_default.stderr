@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `RegisteredWorkspace: Default` is not satisfied
+ --> tests/compile_fail/cleanup_default.rs:8:22
+  |
+8 |     assert_default::<RegisteredWorkspace>();
+  |                      ^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `RegisteredWorkspace`
+  |
+note: required by a bound in `assert_default`
+ --> tests/compile_fail/cleanup_default.rs:5:22
+  |
+5 | fn assert_default<T: Default>() {}
+  |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `ActiveWorkspace: Default` is not satisfied
+ --> tests/compile_fail/cleanup_default.rs:9:22
+  |
+9 |     assert_default::<ActiveWorkspace>();
+  |                      ^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `ActiveWorkspace`
+  |
+note: required by a bound in `assert_default`
+ --> tests/compile_fail/cleanup_default.rs:5:22
+  |
+5 | fn assert_default<T: Default>() {}
+  |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `AuthenticatedCleanupRecord: Default` is not satisfied
+  --> tests/compile_fail/cleanup_default.rs:10:22
+   |
+10 |     assert_default::<AuthenticatedCleanupRecord>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `AuthenticatedCleanupRecord`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/cleanup_default.rs:5:22
+   |
+ 5 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `WorkspaceAbsenceProof: Default` is not satisfied
+  --> tests/compile_fail/cleanup_default.rs:11:22
+   |
+11 |     assert_default::<WorkspaceAbsenceProof>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `WorkspaceAbsenceProof`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/cleanup_default.rs:5:22
+   |
+ 5 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`

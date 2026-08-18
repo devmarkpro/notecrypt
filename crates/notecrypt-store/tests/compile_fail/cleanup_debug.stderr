@@ -1,0 +1,47 @@
+error[E0277]: `RegisteredWorkspace` doesn't implement `Debug`
+ --> tests/compile_fail/cleanup_debug.rs:8:20
+  |
+8 |     assert_debug::<RegisteredWorkspace>();
+  |                    ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RegisteredWorkspace`
+  |
+note: required by a bound in `assert_debug`
+ --> tests/compile_fail/cleanup_debug.rs:5:20
+  |
+5 | fn assert_debug<T: std::fmt::Debug>() {}
+  |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ActiveWorkspace` doesn't implement `Debug`
+ --> tests/compile_fail/cleanup_debug.rs:9:20
+  |
+9 |     assert_debug::<ActiveWorkspace>();
+  |                    ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ActiveWorkspace`
+  |
+note: required by a bound in `assert_debug`
+ --> tests/compile_fail/cleanup_debug.rs:5:20
+  |
+5 | fn assert_debug<T: std::fmt::Debug>() {}
+  |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `AuthenticatedCleanupRecord` doesn't implement `Debug`
+  --> tests/compile_fail/cleanup_debug.rs:10:20
+   |
+10 |     assert_debug::<AuthenticatedCleanupRecord>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `AuthenticatedCleanupRecord`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/cleanup_debug.rs:5:20
+   |
+ 5 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `WorkspaceAbsenceProof` doesn't implement `Debug`
+  --> tests/compile_fail/cleanup_debug.rs:11:20
+   |
+11 |     assert_debug::<WorkspaceAbsenceProof>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `WorkspaceAbsenceProof`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/cleanup_debug.rs:5:20
+   |
+ 5 | fn assert_debug<T: std::fmt::Debug>() {}
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `assert_debug`
