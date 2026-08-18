@@ -8,7 +8,15 @@ publish.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
+criterion.workspace = true
+notecrypt-crypto.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
+
+[[bench]]
+name = "crypto"
+path = "src/crypto.rs"
+harness = false
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

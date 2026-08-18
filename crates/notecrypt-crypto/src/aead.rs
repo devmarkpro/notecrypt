@@ -141,6 +141,10 @@ impl ProtectedBytes {
     }
 }
 
+pub(crate) fn protected_bytes_from_sensitive_buffer(bytes: Vec<u8>) -> ProtectedBytes {
+    ProtectedBytes(bytes)
+}
+
 impl Drop for ProtectedBytes {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -596,7 +600,7 @@ fn validate_public_identity(identity: &PublicEnvelopeIdentity) -> Result<(), Cry
     Ok(())
 }
 
-fn validate_typed_identity(
+pub(crate) fn validate_typed_identity(
     identity: &PublicEnvelopeIdentity,
     expected_kind: u8,
 ) -> Result<(), CryptoError> {
@@ -607,7 +611,7 @@ fn validate_typed_identity(
     Ok(())
 }
 
-fn encrypt_parts(
+pub(crate) fn encrypt_parts(
     identity: &PublicEnvelopeIdentity,
     plaintext: Vec<u8>,
     key: &[u8; 32],
@@ -634,7 +638,7 @@ fn encrypt_parts(
     )
 }
 
-fn decrypt_parts(
+pub(crate) fn decrypt_parts(
     identity: &PublicEnvelopeIdentity,
     parts: &AeadEnvelopeParts,
     key: &[u8; 32],
@@ -778,8 +782,12 @@ fn encode_identity(
     Ok(())
 }
 
+pub(crate) fn keyed_hasher(key: &[u8; 32]) -> Zeroizing<blake3::Hasher> {
+    Zeroizing::new(blake3::Hasher::new_keyed(key))
+}
+
 fn keyed_hash(key: &[u8; 32], input: &[u8]) -> blake3::Hash {
-    let mut hasher = Zeroizing::new(blake3::Hasher::new_keyed(key));
+    let mut hasher = keyed_hasher(key);
     hasher.update(input);
     hasher.finalize()
 }

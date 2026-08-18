@@ -6,6 +6,7 @@ mod kdf;
 mod keys;
 mod recovery;
 mod secret;
+mod stream;
 
 pub use aead::*;
 pub use error::CryptoError;
@@ -22,6 +23,7 @@ pub use secret::{
     ChunkFingerprintKey, ContentWrappingKey, DeviceWrappingKey, LocalVerificationKey, MetadataKey,
     RecoveryPassphrase, RecoveryWrappingKey, SnapshotAuthenticationKey, VaultRootKey,
 };
+pub use stream::*;
 
 /// Fallible cryptographically secure randomness used at atomic construction boundaries.
 pub trait SecureRandom: Send {
