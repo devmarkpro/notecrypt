@@ -25,16 +25,18 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-argon2 = "0.5"
-blake3 = "1.8"
+argon2 = { version = "0.5", features = ["zeroize"] }
+bip39 = { version = "2.2", default-features = false, features = ["std", "zeroize"] }
+blake3 = { version = "1.8", features = ["zeroize"] }
 chacha20poly1305 = "0.10"
 clap = "4.5"
 criterion = "0.7"
 crossbeam-channel = "0.5"
 crossterm = "0.29"
+getrandom = "0.3"
 hkdf = "0.12"
 keyring = { version = "3.6", default-features = false }
-minicbor = "0.26"
+minicbor = { version = "0.26", features = ["alloc"] }
 notify = "8.2"
 proptest = "1.7"
 ratatui = "0.29"

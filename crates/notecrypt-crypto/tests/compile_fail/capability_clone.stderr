@@ -1,0 +1,407 @@
+error[E0277]: the trait bound `RecoveryPassphrase: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:15:20
+   |
+15 |     assert_clone::<RecoveryPassphrase>();
+   |                    ^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoveryPassphrase`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `RecoveryPhrase: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:16:20
+   |
+16 |     assert_clone::<RecoveryPhrase>();
+   |                    ^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoveryPhrase`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `VaultRootKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:17:20
+   |
+17 |     assert_clone::<VaultRootKey>();
+   |                    ^^^^^^^^^^^^ the trait `Clone` is not implemented for `VaultRootKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `RecoveryWrappingKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:18:20
+   |
+18 |     assert_clone::<RecoveryWrappingKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoveryWrappingKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `MetadataKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:19:20
+   |
+19 |     assert_clone::<MetadataKey>();
+   |                    ^^^^^^^^^^^ the trait `Clone` is not implemented for `MetadataKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `SnapshotAuthenticationKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:20:20
+   |
+20 |     assert_clone::<SnapshotAuthenticationKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SnapshotAuthenticationKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ChunkFingerprintKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:21:20
+   |
+21 |     assert_clone::<ChunkFingerprintKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ChunkFingerprintKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ContentWrappingKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:22:20
+   |
+22 |     assert_clone::<ContentWrappingKey>();
+   |                    ^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ContentWrappingKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `LocalVerificationKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:23:20
+   |
+23 |     assert_clone::<LocalVerificationKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `LocalVerificationKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DeviceWrappingKey: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:24:20
+   |
+24 |     assert_clone::<DeviceWrappingKey>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceWrappingKey`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `RecoverySlotPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:25:20
+   |
+25 |     assert_clone::<RecoverySlotPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoverySlotPlaintext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DeviceSlotPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:26:20
+   |
+26 |     assert_clone::<DeviceSlotPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceSlotPlaintext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `MetadataPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:27:20
+   |
+27 |     assert_clone::<MetadataPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `MetadataPlaintext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `TreePlaintext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:28:20
+   |
+28 |     assert_clone::<TreePlaintext>();
+   |                    ^^^^^^^^^^^^^ the trait `Clone` is not implemented for `TreePlaintext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ManifestPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:29:20
+   |
+29 |     assert_clone::<ManifestPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ManifestPlaintext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `SnapshotPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:30:20
+   |
+30 |     assert_clone::<SnapshotPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SnapshotPlaintext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ProtectedBytes: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:31:20
+   |
+31 |     assert_clone::<ProtectedBytes>();
+   |                    ^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ProtectedBytes`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `RecoverySlotContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:32:20
+   |
+32 |     assert_clone::<RecoverySlotContext>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoverySlotContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DeviceSlotContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:33:20
+   |
+33 |     assert_clone::<DeviceSlotContext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceSlotContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `MetadataContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:34:20
+   |
+34 |     assert_clone::<MetadataContext>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `MetadataContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `TreeContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:35:20
+   |
+35 |     assert_clone::<TreeContext>();
+   |                    ^^^^^^^^^^^ the trait `Clone` is not implemented for `TreeContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ManifestContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:36:20
+   |
+36 |     assert_clone::<ManifestContext>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ManifestContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `SnapshotContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:37:20
+   |
+37 |     assert_clone::<SnapshotContext>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SnapshotContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `AuthenticatedHeadContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:38:20
+   |
+38 |     assert_clone::<AuthenticatedHeadContext>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `AuthenticatedHeadContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `LocalStateContext: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:39:20
+   |
+39 |     assert_clone::<LocalStateContext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `LocalStateContext`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `AeadEnvelopeParts: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:40:20
+   |
+40 |     assert_clone::<AeadEnvelopeParts>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `AeadEnvelopeParts`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `RecoverySlotEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:41:20
+   |
+41 |     assert_clone::<RecoverySlotEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoverySlotEnvelope`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `DeviceSlotEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:42:20
+   |
+42 |     assert_clone::<DeviceSlotEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceSlotEnvelope`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `MetadataEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:43:20
+   |
+43 |     assert_clone::<MetadataEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `MetadataEnvelope`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `TreeEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:44:20
+   |
+44 |     assert_clone::<TreeEnvelope>();
+   |                    ^^^^^^^^^^^^ the trait `Clone` is not implemented for `TreeEnvelope`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ManifestEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:45:20
+   |
+45 |     assert_clone::<ManifestEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ManifestEnvelope`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `SnapshotEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:46:20
+   |
+46 |     assert_clone::<SnapshotEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SnapshotEnvelope`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `HeadAuthenticator: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:47:20
+   |
+47 |     assert_clone::<HeadAuthenticator>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `HeadAuthenticator`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `LocalStateAuthenticator: Clone` is not satisfied
+  --> tests/compile_fail/capability_clone.rs:48:20
+   |
+48 |     assert_clone::<LocalStateAuthenticator>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `LocalStateAuthenticator`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/capability_clone.rs:12:20
+   |
+12 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`

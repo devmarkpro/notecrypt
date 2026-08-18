@@ -1,0 +1,31 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/authenticator_construct.rs:4:13
+  |
+4 |     let _ = HeadAuthenticator([0; 32]);
+  |             ^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/aead.rs
+  |
+  |         pub struct $name([u8; 32]);
+  |                          ^^^^^^^^ private field
+...
+  | authenticator_type!(HeadAuthenticator);
+  | -------------------------------------- in this macro invocation
+  = note: this error originates in the macro `authenticator_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/authenticator_construct.rs:5:13
+  |
+5 |     let _ = LocalStateAuthenticator([0; 32]);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/aead.rs
+  |
+  |         pub struct $name([u8; 32]);
+  |                          ^^^^^^^^ private field
+...
+  | authenticator_type!(LocalStateAuthenticator);
+  | -------------------------------------------- in this macro invocation
+  = note: this error originates in the macro `authenticator_type` (in Nightly builds, run with -Z macro-backtrace for more info)

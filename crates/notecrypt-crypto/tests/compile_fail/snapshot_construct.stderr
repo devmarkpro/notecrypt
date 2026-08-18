@@ -1,0 +1,9 @@
+error[E0451]: fields `encrypted` and `outer_authenticator` of struct `SnapshotEnvelope` are private
+ --> tests/compile_fail/snapshot_construct.rs:5:9
+  |
+4 |     let _ = SnapshotEnvelope {
+  |             ---------------- in this type
+5 |         encrypted,
+  |         ^^^^^^^^^ private field
+6 |         outer_authenticator: [0; 32],
+  |         ^^^^^^^^^^^^^^^^^^^ private field

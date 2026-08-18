@@ -1,0 +1,127 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:14:13
+   |
+14 |     let _ = RecoverySlotContext(identity);
+   |             ^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(RecoverySlotContext, RECOVERY_SLOT_OBJECT_KIND);
+   | ------------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:15:13
+   |
+15 |     let _ = DeviceSlotContext(identity);
+   |             ^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(DeviceSlotContext, DEVICE_SLOT_OBJECT_KIND);
+   | --------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:16:13
+   |
+16 |     let _ = MetadataContext(identity);
+   |             ^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(MetadataContext, METADATA_OBJECT_KIND);
+   | ---------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:17:13
+   |
+17 |     let _ = TreeContext(identity);
+   |             ^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(TreeContext, TREE_OBJECT_KIND);
+   | -------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:18:13
+   |
+18 |     let _ = ManifestContext(identity);
+   |             ^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(ManifestContext, MANIFEST_OBJECT_KIND);
+   | ---------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:19:13
+   |
+19 |     let _ = SnapshotContext(identity);
+   |             ^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(SnapshotContext, SNAPSHOT_OBJECT_KIND);
+   | ---------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:20:13
+   |
+20 |     let _ = AuthenticatedHeadContext(identity);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(AuthenticatedHeadContext, AUTHENTICATED_HEAD_OBJECT_KIND);
+   | ----------------------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/context_construct.rs:21:13
+   |
+21 |     let _ = LocalStateContext(identity);
+   |             ^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | context_type!(LocalStateContext, LOCAL_STATE_OBJECT_KIND);
+   | --------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `context_type` (in Nightly builds, run with -Z macro-backtrace for more info)

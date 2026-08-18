@@ -19,7 +19,16 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.93
-exceptions = []
+exceptions = [
+    # BIP39 and its reviewed encoding dependencies use the public-domain CC0 license.
+    { allow = ["CC0-1.0"], crate = "bip39@2.2.2" },
+    { allow = ["CC0-1.0"], crate = "bitcoin_hashes@0.14.101" },
+    { allow = ["CC0-1.0"], crate = "hex-conservative@0.2.2" },
+    # The reviewed canonical CBOR implementation uses this permissive license.
+    { allow = ["BlueOak-1.0.0"], crate = "minicbor@0.26.5" },
+    # RustCrypto uses subtle for constant-time cryptographic operations.
+    { allow = ["BSD-3-Clause"], crate = "subtle@2.6.1" },
+]
 
 [licenses.private]
 ignore = false
