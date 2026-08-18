@@ -1,0 +1,5 @@
+error[E0599]: no variant, associated function, or constant named `RecoverySecret` found for enum `OperationResult` in the current scope
+ --> tests/compile_fail/official_result_absence.rs:4:22
+  |
+4 |     OperationResult::RecoverySecret(secret)
+  |                      ^^^^^^^^^^^^^^ variant, associated function, or constant not found in `OperationResult`

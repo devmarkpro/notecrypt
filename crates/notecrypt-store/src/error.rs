@@ -20,6 +20,8 @@ pub enum StoreError {
     AuthenticationFailed,
     #[error("an operation exceeded its configured resource limit")]
     LimitExceeded,
+    #[error("a bounded storage allocation failed")]
+    AllocationFailed,
     #[error("the operation was cancelled")]
     Cancelled,
     #[error("the operation timed out")]

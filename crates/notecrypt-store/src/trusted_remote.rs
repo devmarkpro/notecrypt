@@ -55,7 +55,7 @@ impl TrustedRemoteRecord {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) const fn provenance(&self) -> TrustedRemoteProvenance {
         self.provenance
     }

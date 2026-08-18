@@ -33,6 +33,14 @@ pub enum ServiceError {
     EventSequenceExhausted,
     /// A bounded observation wait elapsed without a value.
     TimedOut,
+    /// Recovery authentication failed without exposing crypto details.
+    AuthenticationFailed,
+    /// Plaintext cleanup or authenticated cleanup-record reconciliation is required.
+    CleanupRequired,
+    /// The injected monotonic clock failed or moved backwards.
+    ClockFailure,
+    /// A linear capability was stale, mismatched, or already consumed.
+    StaleCapability,
 }
 
 impl fmt::Display for ServiceError {
@@ -52,6 +60,10 @@ impl fmt::Display for ServiceError {
             Self::InvalidProgress => "the operation progress is invalid",
             Self::EventSequenceExhausted => "the operation event sequence was exhausted",
             Self::TimedOut => "the bounded service wait timed out",
+            Self::AuthenticationFailed => "recovery authentication failed",
+            Self::CleanupRequired => "workspace cleanup is required",
+            Self::ClockFailure => "the monotonic session clock failed",
+            Self::StaleCapability => "the capability is stale or mismatched",
         })
     }
 }

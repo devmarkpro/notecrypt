@@ -91,6 +91,12 @@ impl BackendObservationFingerprint {
         }
         Ok(Self(bytes))
     }
+
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn retained_capacity_for_test(&self) -> usize {
+        self.0.capacity()
+    }
 }
 
 pub struct VerifiedReachableHead {
@@ -103,6 +109,14 @@ pub struct CommittedReachableHead {
 
 pub struct PendingUnprovableRemote {
     binding: CommittedReachableBinding,
+}
+
+impl PendingUnprovableRemote {
+    /// Returns the authenticated snapshot already bound into this linear proof.
+    #[must_use]
+    pub const fn authenticated_snapshot(&self) -> SnapshotId {
+        self.binding.verified.target_snapshot
+    }
 }
 
 pub struct PendingRemotePublication {

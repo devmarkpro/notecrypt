@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `value`
+ --> tests/compile_fail/compromise_confirmation_move_after_generated.rs:5:10
+  |
+3 | fn consume(value: CompromiseRekeyConfirmation) {
+  |            ----- move occurs because `value` has type `CompromiseRekeyConfirmation`, which does not implement the `Copy` trait
+4 |     drop(value);
+  |          ----- value moved here
+5 |     drop(value);
+  |          ^^^^^ value used here after move

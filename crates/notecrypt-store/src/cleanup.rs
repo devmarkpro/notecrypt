@@ -926,6 +926,10 @@ pub mod test_support {
 
     use super::*;
 
+    pub fn workspace_id(bytes: [u8; 16]) -> CleanupWorkspaceId {
+        CleanupWorkspaceId(bytes)
+    }
+
     pub enum CleanupRandomStep {
         Bytes([u8; 16]),
         PartialFailure { bytes: [u8; 16], written: usize },

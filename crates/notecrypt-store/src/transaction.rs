@@ -90,6 +90,16 @@ pub(crate) struct TransactionResult {
     pub(crate) metrics: BatchMetrics,
 }
 
+pub(crate) trait CancellationProbe {
+    fn is_cancelled(&self) -> bool;
+}
+
+impl CancellationProbe for AtomicBool {
+    fn is_cancelled(&self) -> bool {
+        self.load(Ordering::Acquire)
+    }
+}
+
 pub(crate) fn commit(
     layout: &StoreLayout,
     batch: DurableBatch<'_>,
@@ -100,7 +110,7 @@ pub(crate) fn commit(
         &mut notecrypt_platform_fs::FileCapability,
     ) -> Result<(), StoreError>,
     guard: &mut dyn PublicationGuard,
-    cancel: &AtomicBool,
+    cancel: &dyn CancellationProbe,
 ) -> Result<TransactionResult, StoreError> {
     commit_observed(
         layout,
@@ -125,7 +135,7 @@ pub(crate) fn commit_observed(
         &mut notecrypt_platform_fs::FileCapability,
     ) -> Result<(), StoreError>,
     guard: &mut dyn PublicationGuard,
-    cancel: &AtomicBool,
+    cancel: &dyn CancellationProbe,
     observer: &mut dyn TransactionObserver,
 ) -> Result<TransactionResult, StoreError> {
     let generation = keys.generation();
@@ -226,7 +236,7 @@ pub(crate) fn commit_observed(
 
     guard.validate()?;
     let authorization = keys.authorize_publication(generation)?;
-    if cancel.load(Ordering::Acquire) {
+    if cancel.is_cancelled() {
         return Err(StoreError::Cancelled);
     }
     observe_published(
@@ -476,8 +486,12 @@ pub(crate) fn write_trusted(
     Ok(())
 }
 
-fn check_boundary(keys: &KeyCell, generation: u64, cancel: &AtomicBool) -> Result<(), StoreError> {
-    if cancel.load(Ordering::Acquire) {
+fn check_boundary(
+    keys: &KeyCell,
+    generation: u64,
+    cancel: &dyn CancellationProbe,
+) -> Result<(), StoreError> {
+    if cancel.is_cancelled() {
         return Err(StoreError::Cancelled);
     }
     keys.validate_generation(generation)

@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::{self, Read, Seek, Write};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
@@ -26,8 +27,9 @@ use crate::reachability::{
 };
 use crate::repository::VaultStore;
 use crate::transaction::{
-    AuthenticatedHead, PublicationGuard, TransactionRequest, authenticate_head,
-    commit as commit_transaction, read_and_authenticate_current_head,
+    AuthenticatedHead, CancellationProbe as TransactionCancellationProbe, PublicationGuard,
+    TransactionRequest, authenticate_head, commit as commit_transaction,
+    read_and_authenticate_current_head,
 };
 use crate::trusted_remote::{
     TrustedRemoteProvenance, TrustedRemoteRecord, authenticate_trusted_remote_if_present,
@@ -301,6 +303,8 @@ pub trait QuarantineImport: Write + Send {
 }
 
 pub trait ReplicationLease: Send {
+    fn cancellation_handle(&self) -> ReplicationCancellation;
+
     fn cancel(&self);
 
     fn authenticate_bootstrap(&mut self, bytes: &[u8]) -> Result<(), StoreError>;
@@ -366,6 +370,37 @@ pub trait ReplicationLease: Send {
     fn finish(self: Box<Self>) -> Result<(), StoreError>;
 }
 
+/// Opaque one-way cancellation handle bound to one replication operation.
+#[derive(Clone)]
+pub struct ReplicationCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ReplicationCancellation {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+/// Read-only cancellation state checked at every bounded replication boundary.
+pub trait ReplicationCancellationProbe: Send + Sync {
+    fn is_cancelled(&self) -> bool;
+}
+
+struct ReplicationTransactionCancellation<'a> {
+    local: &'a AtomicBool,
+    external: Option<&'a dyn ReplicationCancellationProbe>,
+}
+
+impl TransactionCancellationProbe for ReplicationTransactionCancellation<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.local.load(Ordering::Acquire)
+            || self
+                .external
+                .is_some_and(ReplicationCancellationProbe::is_cancelled)
+    }
+}
+
 pub struct CommitReplicatedSnapshot {
     intended_head: Vec<u8>,
 }
@@ -375,6 +410,12 @@ impl CommitReplicatedSnapshot {
     pub fn new(intended_head: Vec<u8>) -> Self {
         Self { intended_head }
     }
+
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn retained_capacity_for_test(&self) -> usize {
+        self.intended_head.capacity()
+    }
 }
 
 pub(crate) trait ReplicationClock: Send + Sync {
@@ -383,20 +424,6 @@ pub(crate) trait ReplicationClock: Send + Sync {
 
 pub(crate) trait FreeSpaceProbe: Send + Sync {
     fn available_bytes(&self) -> Result<u64, StoreError>;
-}
-
-pub(crate) struct DirectoryFreeSpace<'a>(&'a Directory);
-
-impl<'a> DirectoryFreeSpace<'a> {
-    pub(crate) const fn new(directory: &'a Directory) -> Self {
-        Self(directory)
-    }
-}
-
-impl FreeSpaceProbe for DirectoryFreeSpace<'_> {
-    fn available_bytes(&self) -> Result<u64, StoreError> {
-        Ok(self.0.available_space()?)
-    }
 }
 
 pub(crate) trait OperationStatusProbe: Send + Sync {
@@ -423,23 +450,40 @@ impl ClockSource<'_> {
 }
 
 enum SpaceSource<'a> {
-    Directory(DirectoryFreeSpace<'a>),
+    Directory,
     #[allow(dead_code)]
     Injected(&'a dyn FreeSpaceProbe),
 }
 
 impl SpaceSource<'_> {
-    fn available_bytes(&self) -> Result<u64, StoreError> {
+    fn available_bytes(&self, directory: &Directory) -> Result<u64, StoreError> {
         match self {
-            Self::Directory(space) => space.available_bytes(),
+            Self::Directory => directory.available_space().map_err(StoreError::from),
             Self::Injected(space) => space.available_bytes(),
+        }
+    }
+}
+
+enum Shared<'a, T: ?Sized> {
+    #[cfg_attr(not(test), allow(dead_code))]
+    Borrowed(&'a T),
+    Owned(Arc<T>),
+}
+
+impl<T: ?Sized> Deref for Shared<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(value) => value,
+            Self::Owned(value) => value,
         }
     }
 }
 
 enum StatusSource<'a> {
     Keys {
-        keys: &'a KeyCell,
+        keys: Shared<'a, KeyCell>,
         generation: u64,
     },
     #[allow(dead_code)]
@@ -585,8 +629,7 @@ impl QuarantineReservations {
 }
 
 pub(crate) struct QuarantineLease<'a> {
-    store: &'a VaultStore,
-    root: &'a Directory,
+    store: Shared<'a, VaultStore>,
     operation: Directory,
     operation_name: PhysicalComponent,
     operation_id: ReplicationOperationId,
@@ -594,7 +637,7 @@ pub(crate) struct QuarantineLease<'a> {
     limits: ReplicationLimits,
     store_limits: ReplicationLimits,
     effective_quarantine_bytes: u64,
-    reservations: &'a QuarantineReservations,
+    reservations: Shared<'a, QuarantineReservations>,
     clock: ClockSource<'a>,
     space: SpaceSource<'a>,
     revocation: StatusSource<'a>,
@@ -602,16 +645,17 @@ pub(crate) struct QuarantineLease<'a> {
     budget: ReplicationBudget,
     imported: HashMap<ObjectId, VerifiedQuarantineObject>,
     bootstrap_commitment: Option<[u8; 32]>,
-    expected_bootstrap: Option<&'a [u8]>,
+    expected_bootstrap: Option<Shared<'a, [u8]>>,
     operation_state: Arc<AtomicU8>,
     verified_context: Option<VerifiedOperationContext>,
     imports_published: bool,
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
     started: Duration,
     last_progress: Cell<Duration>,
     terminal: bool,
     cleaned: bool,
     reservation_owned: bool,
+    external_cancellation: Option<Arc<dyn ReplicationCancellationProbe>>,
     _os_lock: ExclusiveFileLock,
 }
 
@@ -649,7 +693,7 @@ type ScriptedAuthenticateImport<'a> = dyn Fn(
 
 enum ImportAuthenticator<'a> {
     Keys {
-        keys: &'a KeyCell,
+        keys: Shared<'a, KeyCell>,
         generation: u64,
         vault: VaultId,
     },
@@ -701,9 +745,49 @@ impl ImportAuthenticator<'_> {
     }
 }
 
-impl<'a> QuarantineLease<'a> {
+impl QuarantineLease<'static> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn acquire_authenticated(
+        store: Arc<VaultStore>,
+        limits: ReplicationLimits,
+        backend_limits: ReplicationLimits,
+        operation_limits: ReplicationLimits,
+        keys: Arc<KeyCell>,
+        generation: u64,
+        vault: VaultId,
+        expected_bootstrap: Arc<[u8]>,
+        external_cancellation: Option<Arc<dyn ReplicationCancellationProbe>>,
+    ) -> Result<Self, StoreError> {
+        let mut random = OsRandom;
+        let reservations = Arc::clone(&store.quarantine_reservations);
+        Self::acquire_with_authenticator(
+            Shared::Owned(store),
+            limits,
+            backend_limits,
+            operation_limits,
+            Shared::Owned(reservations),
+            ClockSource::System(SystemClock::start()),
+            SpaceSource::Directory,
+            StatusSource::Keys {
+                keys: Shared::Owned(Arc::clone(&keys)),
+                generation,
+            },
+            ImportAuthenticator::Keys {
+                keys: Shared::Owned(keys),
+                generation,
+                vault,
+            },
+            Some(Shared::Owned(expected_bootstrap)),
+            external_cancellation,
+            &mut random,
+        )
+    }
+}
+
+impl<'a> QuarantineLease<'a> {
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn acquire_authenticated_borrowed(
         store: &'a VaultStore,
         limits: ReplicationLimits,
         backend_limits: ReplicationLimits,
@@ -715,20 +799,24 @@ impl<'a> QuarantineLease<'a> {
     ) -> Result<Self, StoreError> {
         let mut random = OsRandom;
         Self::acquire_with_authenticator(
-            store,
+            Shared::Borrowed(store),
             limits,
             backend_limits,
             operation_limits,
-            &store.quarantine_reservations,
+            Shared::Borrowed(&store.quarantine_reservations),
             ClockSource::System(SystemClock::start()),
-            SpaceSource::Directory(DirectoryFreeSpace::new(&store.layout.quarantine)),
-            StatusSource::Keys { keys, generation },
+            SpaceSource::Directory,
+            StatusSource::Keys {
+                keys: Shared::Borrowed(keys),
+                generation,
+            },
             ImportAuthenticator::Keys {
-                keys,
+                keys: Shared::Borrowed(keys),
                 generation,
                 vault,
             },
-            Some(expected_bootstrap),
+            Some(Shared::Borrowed(expected_bootstrap)),
+            None,
             &mut random,
         )
     }
@@ -748,15 +836,16 @@ impl<'a> QuarantineLease<'a> {
     ) -> Result<Self, StoreError> {
         let mut random = OsRandom;
         let mut lease = Self::acquire_with_authenticator(
-            store,
+            Shared::Borrowed(store),
             limits,
             backend_limits,
             operation_limits,
-            reservations,
+            Shared::Borrowed(reservations),
             ClockSource::Injected(clock),
             SpaceSource::Injected(space),
             StatusSource::Injected(revocation),
             ImportAuthenticator::Scripted(authenticate),
+            None,
             None,
             &mut random,
         )?;
@@ -768,16 +857,17 @@ impl<'a> QuarantineLease<'a> {
 
     #[allow(clippy::too_many_arguments)]
     fn acquire_with_authenticator(
-        store: &'a VaultStore,
+        store: Shared<'a, VaultStore>,
         limits: ReplicationLimits,
         backend_limits: ReplicationLimits,
         operation_limits: ReplicationLimits,
-        reservations: &'a QuarantineReservations,
+        reservations: Shared<'a, QuarantineReservations>,
         clock: ClockSource<'a>,
         space: SpaceSource<'a>,
         revocation: StatusSource<'a>,
         authenticator: ImportAuthenticator<'a>,
-        expected_bootstrap: Option<&'a [u8]>,
+        expected_bootstrap: Option<Shared<'a, [u8]>>,
+        external_cancellation: Option<Arc<dyn ReplicationCancellationProbe>>,
         random: &mut dyn SecureRandom,
     ) -> Result<Self, StoreError> {
         let root = &store.layout.quarantine;
@@ -797,7 +887,7 @@ impl<'a> QuarantineLease<'a> {
         let limits = store_limits
             .strictest(backend_limits)
             .strictest(operation_limits);
-        let starting_free = space.available_bytes()?;
+        let starting_free = space.available_bytes(root)?;
         let mut effective = limits.effective_quarantine_bytes(
             limits.max_quarantine_bytes,
             limits.max_quarantine_bytes,
@@ -807,7 +897,7 @@ impl<'a> QuarantineLease<'a> {
         global_policy.free_space_reserve_bytes = limits.free_space_reserve_bytes;
         let global_maximum =
             global_policy.effective_quarantine_bytes(u64::MAX, u64::MAX, starting_free)?;
-        if std::ptr::eq(reservations, Arc::as_ptr(&store.repository_reservations)) {
+        if std::ptr::eq(&*reservations, Arc::as_ptr(&store.repository_reservations)) {
             effective = effective.min(global_maximum / 2);
         }
         if effective == 0 {
@@ -830,7 +920,6 @@ impl<'a> QuarantineLease<'a> {
         let started = clock.elapsed();
         Ok(Self {
             store,
-            root,
             operation,
             operation_name,
             operation_id,
@@ -850,18 +939,24 @@ impl<'a> QuarantineLease<'a> {
             operation_state: Arc::new(AtomicU8::new(0)),
             verified_context: None,
             imports_published: false,
-            cancelled: AtomicBool::new(false),
+            cancelled: Arc::new(AtomicBool::new(false)),
             started,
             last_progress: Cell::new(started),
             terminal: false,
             cleaned: false,
             reservation_owned: true,
+            external_cancellation,
             _os_lock: os_lock,
         })
     }
 
     fn check_boundary(&self, pending_bytes: u64) -> Result<Duration, StoreError> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancelled.load(Ordering::Acquire)
+            || self
+                .external_cancellation
+                .as_ref()
+                .is_some_and(|cancellation| cancellation.is_cancelled())
+        {
             return Err(StoreError::Cancelled);
         }
         self.revocation.check()?;
@@ -874,7 +969,7 @@ impl<'a> QuarantineLease<'a> {
         {
             return Err(StoreError::TimedOut);
         }
-        let available = self.space.available_bytes()?;
+        let available = self.space.available_bytes(&self.store.layout.quarantine)?;
         let needed = self
             .limits
             .free_space_reserve_bytes
@@ -925,7 +1020,9 @@ impl<'a> QuarantineLease<'a> {
         }
         let maximum_files =
             usize::try_from(self.limits.max_object_count).map_err(|_| StoreError::LimitExceeded)?;
-        self.root
+        self.store
+            .layout
+            .quarantine
             .remove_private_file_tree(&self.operation_name, maximum_files)?;
         self.cleaned = true;
         Ok(())
@@ -1099,6 +1196,12 @@ impl<'a> QuarantineLease<'a> {
 }
 
 impl ReplicationLease for QuarantineLease<'_> {
+    fn cancellation_handle(&self) -> ReplicationCancellation {
+        ReplicationCancellation {
+            cancelled: Arc::clone(&self.cancelled),
+        }
+    }
+
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
@@ -1126,6 +1229,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         }
         if self
             .expected_bootstrap
+            .as_deref()
             .is_some_and(|expected| expected != bytes)
         {
             return Err(self.fail(StoreError::AuthenticationFailed));
@@ -1237,7 +1341,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         let (keys, generation) = match &self.authenticator {
             ImportAuthenticator::Keys {
                 keys, generation, ..
-            } => (*keys, *generation),
+            } => (&**keys, *generation),
             #[cfg(test)]
             ImportAuthenticator::Scripted(_) => return Err(StoreError::InvalidCapability),
         };
@@ -1363,7 +1467,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         let (keys, generation) = match &self.authenticator {
             ImportAuthenticator::Keys {
                 keys, generation, ..
-            } => (*keys, *generation),
+            } => (&**keys, *generation),
             #[cfg(test)]
             ImportAuthenticator::Scripted(_) => return Err(StoreError::InvalidCapability),
         };
@@ -1395,7 +1499,10 @@ impl ReplicationLease for QuarantineLease<'_> {
             intended_head: request.intended_head,
             expected_base: verified_context.local_head.map(|local| local.snapshot),
         };
-        let cancel = &self.cancelled;
+        let cancel = ReplicationTransactionCancellation {
+            local: &self.cancelled,
+            external: self.external_cancellation.as_deref(),
+        };
         let result = commit_applied(
             verified,
             context,
@@ -1422,7 +1529,7 @@ impl ReplicationLease for QuarantineLease<'_> {
                     transaction,
                     |_id, _file| Ok(()),
                     guard,
-                    cancel,
+                    &cancel,
                 )?;
                 if committed.snapshot != target {
                     return Err(StoreError::AuthenticationFailed);
@@ -1444,7 +1551,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         let (keys, generation) = match &self.authenticator {
             ImportAuthenticator::Keys {
                 keys, generation, ..
-            } => (*keys, *generation),
+            } => (&**keys, *generation),
             #[cfg(test)]
             ImportAuthenticator::Scripted(_) => return Err(StoreError::InvalidCapability),
         };
@@ -1504,7 +1611,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         let (keys, generation) = match &self.authenticator {
             ImportAuthenticator::Keys {
                 keys, generation, ..
-            } => (*keys, *generation),
+            } => (&**keys, *generation),
             #[cfg(test)]
             ImportAuthenticator::Scripted(_) => return Err(StoreError::InvalidCapability),
         };
@@ -1614,7 +1721,10 @@ impl ReplicationLease for QuarantineLease<'_> {
             intended_head: request.intended_head,
             expected_base: Some(local.snapshot),
         };
-        let cancel = &self.cancelled;
+        let cancel = ReplicationTransactionCancellation {
+            local: &self.cancelled,
+            external: self.external_cancellation.as_deref(),
+        };
         let result = commit_reconciled(verified_remote, context, intended_for_proof, || {
             let batch = self.store.begin_durable_batch()?;
             let current = read_and_authenticate_current_head(&self.store.layout, keys, generation)?
@@ -1634,7 +1744,7 @@ impl ReplicationLease for QuarantineLease<'_> {
                 transaction,
                 |_id, _file| Ok(()),
                 guard,
-                cancel,
+                &cancel,
             )?;
             if committed.snapshot != target {
                 return Err(StoreError::AuthenticationFailed);
@@ -1664,7 +1774,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         let (keys, generation) = match &self.authenticator {
             ImportAuthenticator::Keys {
                 keys, generation, ..
-            } => (*keys, *generation),
+            } => (&**keys, *generation),
             #[cfg(test)]
             ImportAuthenticator::Scripted(_) => return Err(StoreError::InvalidCapability),
         };
@@ -1672,6 +1782,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         record_or_require_unprovable_acknowledgement(committed, &context, |observation| {
             let _mutation = self.store.begin_store_mutation()?;
             let _publication = keys.authorize_publication(generation)?;
+            self.check_boundary(0)?;
             write_trusted_remote(
                 &self.store.layout,
                 &TrustedRemoteRecord::new(
@@ -1697,7 +1808,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         let (keys, generation) = match &self.authenticator {
             ImportAuthenticator::Keys {
                 keys, generation, ..
-            } => (*keys, *generation),
+            } => (&**keys, *generation),
             #[cfg(test)]
             ImportAuthenticator::Scripted(_) => return Err(StoreError::InvalidCapability),
         };
@@ -1705,6 +1816,7 @@ impl ReplicationLease for QuarantineLease<'_> {
         acknowledge_unprovable_remote(pending, &context, |observation| {
             let _mutation = self.store.begin_store_mutation()?;
             let _publication = keys.authorize_publication(generation)?;
+            self.check_boundary(0)?;
             write_trusted_remote(
                 &self.store.layout,
                 &TrustedRemoteRecord::new(
@@ -2125,6 +2237,302 @@ fn sweep_stale_quarantines(root: &Directory) -> Result<Vec<[u8; 16]>, StoreError
         swept.push(operation_id);
     }
     Ok(swept)
+}
+
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::io::Write;
+    use std::sync::Arc;
+
+    use notecrypt_core::{ObjectId, SnapshotId, VaultId};
+    use notecrypt_crypto::{
+        AUTHENTICATED_HEAD_OBJECT_KIND, AuthenticatedHeadContext, CryptoError,
+        PublicEnvelopeIdentity, SNAPSHOT_OBJECT_KIND, SecureRandom, SnapshotContext,
+        SnapshotPlaintext, TREE_OBJECT_KIND, TreeContext, TreePlaintext, TypedAeadEnvelope,
+        VaultKeys, VaultRootKey, authenticate_head as authenticate_head_bytes, derive_vault_keys,
+        encrypt_snapshot, encrypt_tree,
+    };
+    use notecrypt_format::{
+        AeadAlgorithmId, AeadObject, AuthenticationAlgorithmId, CryptoProfileId, DecodeLimits,
+        FormatVersion, HeadPayload, HeadRecord, LogicalTree, OrdinaryAeadKind, SnapshotObject,
+        SnapshotPayload, TreeEntry, decode_local_state, encode_aead_object, encode_head,
+        encode_head_payload, encode_snapshot_object, encode_snapshot_payload, encode_tree,
+    };
+
+    use super::{
+        BackendObservationFingerprint, CommitReplicatedSnapshot, ImportedObjectKind, KeyCell,
+        PendingUnprovableRemote, PublicationGuard, QuarantineLease, ReplicationLease,
+        ReplicationLimits, StoreError, TrustedRemoteProvenance,
+    };
+    use crate::local_io::read_optional;
+    use crate::repository::VaultStore;
+    use crate::trusted_remote::verify_authenticated_trusted_remote;
+
+    pub struct PendingFreshnessFixture {
+        lease: Box<dyn ReplicationLease>,
+        pending: PendingUnprovableRemote,
+        snapshot: SnapshotId,
+    }
+
+    pub struct FreshnessReadback {
+        store: Arc<VaultStore>,
+        keys: Arc<KeyCell>,
+        generation: u64,
+    }
+
+    impl PendingFreshnessFixture {
+        pub fn into_parts(
+            self,
+        ) -> (
+            Box<dyn ReplicationLease>,
+            PendingUnprovableRemote,
+            SnapshotId,
+        ) {
+            (self.lease, self.pending, self.snapshot)
+        }
+    }
+
+    struct AllowPublication;
+
+    impl PublicationGuard for AllowPublication {
+        fn validate(&mut self) -> Result<(), StoreError> {
+            Ok(())
+        }
+    }
+
+    struct FixedRandom(u8);
+
+    impl SecureRandom for FixedRandom {
+        fn fill(&mut self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            destination.fill(self.0);
+            self.0 = self.0.wrapping_add(1);
+            Ok(())
+        }
+    }
+
+    struct EmptyGraph {
+        tree_id: ObjectId,
+        tree: Vec<u8>,
+        snapshot_id: ObjectId,
+        snapshot: Vec<u8>,
+        logical_snapshot: SnapshotId,
+        head: Vec<u8>,
+    }
+
+    pub fn pending_unprovable_remote(
+        repository_root: &std::path::Path,
+        local_state_root: &std::path::Path,
+        vault: VaultId,
+        seed: u8,
+    ) -> Result<(PendingFreshnessFixture, FreshnessReadback), StoreError> {
+        let mut random = FixedRandom(seed);
+        let root = VaultRootKey::generate(&mut random)?;
+        let derived = derive_vault_keys(&root)?;
+        let graph = build_empty_graph(vault, &derived, seed)?;
+        let store = Arc::new(VaultStore::create_empty(
+            repository_root,
+            local_state_root,
+            vault,
+        )?);
+        let keys = Arc::new(KeyCell::new(root)?);
+        let generation = keys.generation();
+        let mut limits = ReplicationLimits::PHASE_1;
+        limits.max_aggregate_bytes = 1 << 20;
+        limits.max_quarantine_bytes = 1 << 20;
+        let mut lease = QuarantineLease::acquire_authenticated(
+            Arc::clone(&store),
+            ReplicationLimits::PHASE_1,
+            limits,
+            limits,
+            Arc::clone(&keys),
+            generation,
+            vault,
+            Arc::from(&b""[..]),
+            None,
+        )?;
+        lease.bootstrap_commitment = Some([seed; 32]);
+        for (id, kind, bytes) in [
+            (graph.tree_id, ImportedObjectKind::Tree, graph.tree),
+            (
+                graph.snapshot_id,
+                ImportedObjectKind::Snapshot,
+                graph.snapshot,
+            ),
+        ] {
+            let declared = u64::try_from(bytes.len()).map_err(|_| StoreError::LimitExceeded)?;
+            let mut import = lease.begin_import(id, kind, declared)?;
+            import.write_all(&bytes)?;
+            import.finish()?;
+        }
+        let head = lease.authenticate_head(&graph.head)?;
+        let verified =
+            lease.verify_reachable(head, BackendObservationFingerprint::try_new(vec![seed])?)?;
+        let committed = lease.commit_replicated_snapshot(
+            verified,
+            CommitReplicatedSnapshot::new(graph.head),
+            &mut AllowPublication,
+        )?;
+        let pending = lease
+            .record_trusted_remote(committed)?
+            .ok_or(StoreError::InvalidCapability)?;
+        Ok((
+            PendingFreshnessFixture {
+                lease: Box::new(lease),
+                pending,
+                snapshot: graph.logical_snapshot,
+            },
+            FreshnessReadback {
+                store,
+                keys,
+                generation,
+            },
+        ))
+    }
+
+    pub fn freshness_unprovable_was_acknowledged(
+        readback: &FreshnessReadback,
+    ) -> Result<bool, StoreError> {
+        let bytes = read_optional(
+            &readback.store.layout.trusted_remote,
+            &crate::layout::component("remote")?,
+        )?;
+        let Some(bytes) = bytes else {
+            return Ok(false);
+        };
+        let record = decode_local_state(&bytes, &DecodeLimits::PHASE_1)?;
+        let trusted = verify_authenticated_trusted_remote(
+            &record,
+            readback.keys.as_ref(),
+            readback.generation,
+        )?;
+        Ok(matches!(
+            trusted.provenance(),
+            TrustedRemoteProvenance::FreshnessUnprovableAcknowledged
+        ))
+    }
+
+    fn build_empty_graph(
+        vault: notecrypt_core::VaultId,
+        keys: &VaultKeys,
+        seed: u8,
+    ) -> Result<EmptyGraph, StoreError> {
+        let mut random = FixedRandom(seed);
+        let tree_id = ObjectId::from_bytes([seed.wrapping_add(1); 32]);
+        let snapshot_id = ObjectId::from_bytes([seed.wrapping_add(2); 32]);
+        let logical_snapshot = SnapshotId::from_bytes([seed.wrapping_add(3); 32]);
+        let root_id = [seed.wrapping_add(4); 16];
+
+        let tree = LogicalTree::try_new(
+            root_id,
+            vec![TreeEntry::root(root_id)],
+            &DecodeLimits::PHASE_1,
+        )?;
+        let tree_identity = PublicEnvelopeIdentity {
+            profile_id: 1,
+            vault_id: *vault.as_bytes(),
+            object_kind: TREE_OBJECT_KIND,
+            format_version: 1,
+            object_id: *tree_id.as_bytes(),
+        };
+        let tree_envelope = encrypt_tree(
+            &TreeContext::try_new(tree_identity)?,
+            TreePlaintext::try_new(encode_tree(&tree)?)?,
+            &keys.metadata,
+            &mut random,
+        )?;
+        let (identity, nonce, ciphertext, tag) = tree_envelope
+            .into_parts()
+            .into_public_parts()
+            .into_components();
+        let tree = encode_aead_object(&AeadObject::try_new(
+            CryptoProfileId::profile_one(),
+            AeadAlgorithmId::xchacha20_poly1305(),
+            identity.vault_id,
+            OrdinaryAeadKind::Tree,
+            FormatVersion::v1(),
+            identity.object_id,
+            &nonce,
+            ciphertext,
+            &tag,
+            &DecodeLimits::PHASE_1,
+        )?)?;
+
+        let snapshot_payload = SnapshotPayload::try_new(
+            *logical_snapshot.as_bytes(),
+            Vec::new(),
+            *tree_id.as_bytes(),
+            [seed.wrapping_add(5); 16],
+            "replication-service-eze",
+            &DecodeLimits::PHASE_1,
+        )?;
+        let snapshot_identity = PublicEnvelopeIdentity {
+            profile_id: 1,
+            vault_id: *vault.as_bytes(),
+            object_kind: SNAPSHOT_OBJECT_KIND,
+            format_version: 1,
+            object_id: *snapshot_id.as_bytes(),
+        };
+        let snapshot_envelope = encrypt_snapshot(
+            &SnapshotContext::try_new(snapshot_identity)?,
+            SnapshotPlaintext::try_new(encode_snapshot_payload(&snapshot_payload)?)?,
+            &keys.metadata,
+            &keys.snapshot_authentication,
+            &mut random,
+        )?;
+        let (parts, outer) = snapshot_envelope.into_parts();
+        let (identity, nonce, ciphertext, tag) = parts.into_public_parts().into_components();
+        let snapshot = encode_snapshot_object(&SnapshotObject::try_new(
+            CryptoProfileId::profile_one(),
+            AeadAlgorithmId::xchacha20_poly1305(),
+            AuthenticationAlgorithmId::keyed_blake3_256(),
+            identity.vault_id,
+            FormatVersion::v1(),
+            identity.object_id,
+            &nonce,
+            ciphertext,
+            &tag,
+            &outer,
+            &DecodeLimits::PHASE_1,
+        )?)?;
+
+        let head_payload = HeadPayload::new(
+            *logical_snapshot.as_bytes(),
+            *snapshot_id.as_bytes(),
+            *tree_id.as_bytes(),
+        );
+        let canonical_head = encode_head_payload(&head_payload)?;
+        let head_identity = PublicEnvelopeIdentity {
+            profile_id: 1,
+            vault_id: *vault.as_bytes(),
+            object_kind: AUTHENTICATED_HEAD_OBJECT_KIND,
+            format_version: 1,
+            object_id: [seed.wrapping_add(6); 32],
+        };
+        let authenticator = authenticate_head_bytes(
+            &AuthenticatedHeadContext::try_new(head_identity)?,
+            &canonical_head,
+            &keys.snapshot_authentication,
+        )?;
+        let head = encode_head(&HeadRecord::try_new(
+            CryptoProfileId::profile_one(),
+            AuthenticationAlgorithmId::keyed_blake3_256(),
+            *vault.as_bytes(),
+            FormatVersion::v1(),
+            head_identity.object_id,
+            head_payload,
+            authenticator.as_bytes(),
+            &DecodeLimits::PHASE_1,
+        )?)?;
+
+        Ok(EmptyGraph {
+            tree_id,
+            tree,
+            snapshot_id,
+            snapshot,
+            logical_snapshot,
+            head,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -3366,7 +3774,7 @@ mod tests {
         let mut operation_limits = ReplicationLimits::PHASE_1;
         operation_limits.max_aggregate_bytes = 1 << 20;
         operation_limits.max_quarantine_bytes = 1 << 20;
-        let mut lease = QuarantineLease::acquire_authenticated(
+        let mut lease = QuarantineLease::acquire_authenticated_borrowed(
             &store,
             ReplicationLimits::PHASE_1,
             operation_limits,
@@ -3428,7 +3836,7 @@ mod tests {
         let mut limits = ReplicationLimits::PHASE_1;
         limits.max_aggregate_bytes = 1 << 20;
         limits.max_quarantine_bytes = 1 << 20;
-        let mut lease = QuarantineLease::acquire_authenticated(
+        let mut lease = QuarantineLease::acquire_authenticated_borrowed(
             &store,
             ReplicationLimits::PHASE_1,
             limits,
@@ -3486,7 +3894,7 @@ mod tests {
         ));
         Box::new(lease).finish().unwrap();
 
-        let mut continuity = QuarantineLease::acquire_authenticated(
+        let mut continuity = QuarantineLease::acquire_authenticated_borrowed(
             &store,
             ReplicationLimits::PHASE_1,
             limits,
@@ -3579,7 +3987,7 @@ mod tests {
         limits.max_aggregate_bytes = 4 << 20;
         limits.max_quarantine_bytes = 4 << 20;
 
-        let mut baseline = QuarantineLease::acquire_authenticated(
+        let mut baseline = QuarantineLease::acquire_authenticated_borrowed(
             &store,
             ReplicationLimits::PHASE_1,
             limits,
@@ -3669,7 +4077,7 @@ mod tests {
         );
         let merged_head_for_readback = merged_head.clone();
 
-        let mut reconciliation = QuarantineLease::acquire_authenticated(
+        let mut reconciliation = QuarantineLease::acquire_authenticated_borrowed(
             &store,
             ReplicationLimits::PHASE_1,
             limits,
@@ -3733,7 +4141,7 @@ mod tests {
         assert_eq!(current.snapshot_object, merged_snapshot_id);
         Box::new(reconciliation).finish().unwrap();
 
-        let mut readback = QuarantineLease::acquire_authenticated(
+        let mut readback = QuarantineLease::acquire_authenticated_borrowed(
             &store,
             ReplicationLimits::PHASE_1,
             limits,

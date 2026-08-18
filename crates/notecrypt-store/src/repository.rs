@@ -527,6 +527,13 @@ impl VaultStore {
 }
 
 impl UnlockedVault {
+    /// Returns an opaque one-way handle that revokes this exact key generation.
+    #[must_use]
+    pub fn revocation_handle(&self) -> VaultRevocationHandle {
+        VaultRevocationHandle {
+            keys: Arc::clone(&self.keys),
+        }
+    }
     #[must_use]
     pub fn with_workspace_absence_authority(
         mut self,
@@ -614,21 +621,32 @@ impl UnlockedVault {
         &self,
         backend_limits: ReplicationLimits,
         operation_limits: ReplicationLimits,
-    ) -> Result<Box<dyn ReplicationLease + '_>, StoreError> {
+    ) -> Result<Box<dyn ReplicationLease>, StoreError> {
+        self.acquire_replication_lease_with_cancellation(backend_limits, operation_limits, None)
+    }
+
+    pub fn acquire_replication_lease_with_cancellation(
+        &self,
+        backend_limits: ReplicationLimits,
+        operation_limits: ReplicationLimits,
+        cancellation: Option<Arc<dyn crate::ReplicationCancellationProbe>>,
+    ) -> Result<Box<dyn ReplicationLease>, StoreError> {
         self.keys.validate_generation(self.generation)?;
-        let authenticated_bootstrap = self
-            .authenticated_bootstrap
-            .as_deref()
-            .ok_or(StoreError::InvalidCapability)?;
+        let authenticated_bootstrap = Arc::clone(
+            self.authenticated_bootstrap
+                .as_ref()
+                .ok_or(StoreError::InvalidCapability)?,
+        );
         Ok(Box::new(QuarantineLease::acquire_authenticated(
-            self.store.as_ref(),
+            Arc::clone(&self.store),
             ReplicationLimits::PHASE_1,
             backend_limits,
             operation_limits,
-            &self.keys,
+            Arc::clone(&self.keys),
             self.generation,
             self.store.layout.vault,
             authenticated_bootstrap,
+            cancellation,
         )?))
     }
 
@@ -683,6 +701,19 @@ impl UnlockedVault {
 
     pub fn close(self) -> Result<(), StoreError> {
         self.keys.close()
+    }
+}
+
+/// Opaque one-way root revocation capability.
+#[derive(Clone)]
+pub struct VaultRevocationHandle {
+    keys: Arc<KeyCell>,
+}
+
+impl VaultRevocationHandle {
+    /// Makes every later bounded use of this unlocked generation fail closed.
+    pub fn revoke(&self) {
+        self.keys.revoke();
     }
 }
 

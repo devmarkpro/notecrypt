@@ -10,6 +10,7 @@ use crate::{OperationEvent, OperationResult, Progress, ProgressUnit, ServiceErro
 const ACCEPTED: u8 = 0;
 const RUNNING: u8 = 1;
 const TERMINAL: u8 = 2;
+const MAX_OPERATION_LEASES: u8 = 8;
 
 /// A service-generated opaque operation identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -106,10 +107,35 @@ pub(crate) struct OperationState {
     event_changed: Condvar,
     result: Mutex<Option<Result<OperationResult, ServiceError>>>,
     result_changed: Condvar,
+    pub(crate) session_generation: Option<u64>,
+    pub(crate) mutating: bool,
+    lease_cancellations: Mutex<LeaseCancellations>,
+    lease_cancellation_queued: AtomicBool,
+    lease_cancellation_dispatched: AtomicBool,
+    repository_cancellation: Arc<crate::RepositoryCancellation>,
+}
+
+struct LeaseCancellations {
+    values: [Option<Arc<dyn crate::OperationCancellation>>; MAX_OPERATION_LEASES as usize],
+    len: usize,
+}
+
+impl LeaseCancellations {
+    fn new() -> Self {
+        Self {
+            values: std::array::from_fn(|_| None),
+            len: 0,
+        }
+    }
 }
 
 impl OperationState {
-    pub(crate) fn new(id: OperationId, event_capacity: usize) -> Result<Self, ServiceError> {
+    pub(crate) fn new(
+        id: OperationId,
+        event_capacity: usize,
+        session_generation: Option<u64>,
+        mutating: bool,
+    ) -> Result<Self, ServiceError> {
         Ok(Self {
             id,
             lifecycle: AtomicU8::new(ACCEPTED),
@@ -120,7 +146,34 @@ impl OperationState {
             event_changed: Condvar::new(),
             result: Mutex::new(None),
             result_changed: Condvar::new(),
+            session_generation,
+            mutating,
+            lease_cancellations: Mutex::new(LeaseCancellations::new()),
+            lease_cancellation_queued: AtomicBool::new(false),
+            lease_cancellation_dispatched: AtomicBool::new(false),
+            repository_cancellation: Arc::new(crate::RepositoryCancellation::new()),
         })
+    }
+
+    pub(crate) fn register_lease_cancellation(
+        &self,
+        cancellation: Arc<dyn crate::OperationCancellation>,
+    ) -> Result<(), ServiceError> {
+        let mut slots = lock(&self.lease_cancellations);
+        if self.cancelled.load(Ordering::Acquire) {
+            drop(slots);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cancellation.cancel();
+            }));
+            return Err(ServiceError::Cancelled);
+        }
+        if slots.len == slots.values.len() {
+            return Err(ServiceError::CapacityExceeded);
+        }
+        let index = slots.len;
+        slots.values[index] = Some(cancellation);
+        slots.len += 1;
+        Ok(())
     }
 
     pub(crate) fn mark_running(&self) -> bool {
@@ -141,11 +194,51 @@ impl OperationState {
         self.lifecycle.load(Ordering::Acquire) == ACCEPTED
     }
 
-    pub(crate) fn request_cancel(&self) {
+    pub(crate) fn mark_cancelled(&self) {
+        self.mark_security_cancelled();
         let _events = lock(&self.events);
+    }
+
+    pub(crate) fn mark_security_cancelled(&self) {
         self.cancelled.store(true, Ordering::Release);
+        self.repository_cancellation.cancel();
         self.event_changed.notify_all();
         self.result_changed.notify_all();
+    }
+
+    pub(crate) fn cancel_registered_leases(&self) -> bool {
+        if self
+            .lease_cancellation_dispatched
+            .swap(true, Ordering::AcqRel)
+        {
+            return false;
+        }
+        let snapshot = {
+            let cancellations = lock(&self.lease_cancellations);
+            std::array::from_fn::<_, { MAX_OPERATION_LEASES as usize }, _>(|index| {
+                (index < cancellations.len)
+                    .then(|| cancellations.values[index].as_ref().map(Arc::clone))
+                    .flatten()
+            })
+        };
+        for cancellation in snapshot.iter().flatten() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cancellation.cancel();
+            }));
+        }
+        true
+    }
+
+    pub(crate) fn mark_lease_cancellation_queued(&self) -> bool {
+        !self.lease_cancellation_queued.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn request_cancel(&self) {
+        self.mark_cancelled();
+    }
+
+    pub(crate) fn repository_cancellation(&self) -> Arc<crate::RepositoryCancellation> {
+        Arc::clone(&self.repository_cancellation)
     }
 
     pub(crate) fn publish(&self, event: OperationEvent) -> Result<(), ServiceError> {
@@ -292,17 +385,19 @@ impl OperationState {
         self.cancelled.store(true, Ordering::Release);
         self.event_changed.notify_all();
         self.result_changed.notify_all();
+        drop(events);
     }
 }
 
 /// Safe operation callbacks supplied to a synchronous executor.
 pub struct OperationContext {
     state: Arc<OperationState>,
+    service: Weak<ServiceInner>,
 }
 
 impl OperationContext {
-    pub(crate) fn new(state: Arc<OperationState>) -> Self {
-        Self { state }
+    pub(crate) fn new(state: Arc<OperationState>, service: Weak<ServiceInner>) -> Self {
+        Self { state, service }
     }
 
     pub fn id(&self) -> OperationId {
@@ -313,22 +408,12 @@ impl OperationContext {
         self.state.cancelled.load(Ordering::Acquire)
     }
 
-    /// Borrows the exact service-owned cancellation flag for one synchronous call.
-    ///
-    /// This bridge lets store and backend operations observe cancellation at
-    /// their own bounded internal boundaries without copying or transferring
-    /// ownership of cancellation state.
-    pub fn with_cancellation_flag<T>(&self, action: impl FnOnce(&AtomicBool) -> T) -> T {
-        action(&self.state.cancelled)
-    }
-
     /// Checks cooperative cancellation at one explicit bounded boundary.
     pub fn safe_boundary(&self) -> Result<(), ServiceError> {
-        if self.is_cancelled() {
-            Err(ServiceError::Cancelled)
-        } else {
-            Ok(())
-        }
+        self.service
+            .upgrade()
+            .ok_or(ServiceError::Closed)?
+            .operation_safe_boundary(&self.state)
     }
 
     pub fn phase_changed(&self, phase: OperationPhase) -> Result<(), ServiceError> {
@@ -378,6 +463,117 @@ impl OperationContext {
         self.safe_boundary()?;
         self.state.publish(OperationEvent::CleanupRequired)?;
         self.safe_boundary()
+    }
+
+    pub fn acquire_local_lease(&self) -> Result<Box<dyn crate::LocalVaultLease>, ServiceError> {
+        self.service
+            .upgrade()
+            .ok_or(ServiceError::Closed)?
+            .acquire_local_lease(&self.state)
+    }
+
+    pub fn acquire_replication_lease(
+        &self,
+        backend: crate::ReplicationLimitProfile,
+        operation: crate::ReplicationLimitProfile,
+    ) -> Result<Box<dyn crate::ReplicationVaultLease>, ServiceError> {
+        self.service
+            .upgrade()
+            .ok_or(ServiceError::Closed)?
+            .acquire_replication_lease(&self.state, backend, operation)
+    }
+
+    pub fn create_workspace(
+        &self,
+        mode: crate::WorkspaceMode,
+        repository_root: std::path::PathBuf,
+    ) -> Result<crate::WorkspaceSession, ServiceError> {
+        self.service
+            .upgrade()
+            .ok_or(ServiceError::Closed)?
+            .create_workspace(&self.state, mode, repository_root)
+    }
+
+    pub fn remove_workspace(&self, workspace: crate::WorkspaceSession) -> Result<(), ServiceError> {
+        let service = self.service.upgrade().ok_or(ServiceError::Closed)?;
+        let generation = self.state.session_generation.ok_or(ServiceError::Locked)?;
+        let session = service.session.as_ref().ok_or(ServiceError::Locked)?;
+        let result = session.remove_workspace(workspace, generation);
+        if result == Err(ServiceError::CleanupRequired) {
+            service.latch_cleanup_required();
+        }
+        result
+    }
+
+    pub fn commit_workspace_stable_revision(
+        &self,
+        workspace: &crate::WorkspaceSession,
+        relative_path: &crate::LogicalWorkspacePath,
+        expected_generation: u64,
+        request: crate::LocalStreamRevisionRequest,
+    ) -> Result<crate::LocalSnapshot, ServiceError> {
+        let service = self.service.upgrade().ok_or(ServiceError::Closed)?;
+        let generation = self.state.session_generation.ok_or(ServiceError::Locked)?;
+        let session = service.session.as_ref().ok_or(ServiceError::Locked)?;
+        if !session.owns_workspace(workspace, generation) {
+            return Err(ServiceError::StaleCapability);
+        }
+        let mut lease = service.acquire_local_lease(&self.state)?;
+        let result = session.commit_stable_revision(
+            workspace,
+            relative_path,
+            expected_generation,
+            lease.as_mut(),
+            request,
+        );
+        let finish = lease.finish().map_err(crate::session::map_repository_error);
+        let outcome = match (result, finish) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(primary), Ok(())) => Err(primary),
+            (_, Err(cleanup)) => Err(cleanup),
+        };
+        if matches!(outcome, Err(ServiceError::CleanupRequired)) {
+            service.latch_cleanup_required();
+        }
+        outcome
+    }
+
+    /// Arms this exact running mutating operation as the sole bounded final save.
+    pub fn arm_final_save(&self) -> Result<FinalSaveGuard, ServiceError> {
+        self.service
+            .upgrade()
+            .ok_or(ServiceError::Closed)?
+            .arm_final_save(&self.state)
+    }
+
+    /// Pauses this exact verified replication operation for explicit freshness consent.
+    pub fn await_freshness_acknowledgement(
+        &self,
+        action: Box<dyn crate::PendingFreshnessAction>,
+    ) -> Result<(), ServiceError> {
+        self.service
+            .upgrade()
+            .ok_or(ServiceError::Closed)?
+            .await_freshness_acknowledgement(&self.state, action)
+    }
+}
+
+/// Linear guard for the one exact operation permitted to finish during lock grace.
+pub struct FinalSaveGuard {
+    pub(crate) service: Weak<ServiceInner>,
+    pub(crate) state: Arc<OperationState>,
+    pub(crate) generation: u64,
+    pub(crate) armed: bool,
+}
+
+impl Drop for FinalSaveGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Some(service) = self.service.upgrade() {
+                service.disarm_final_save(&self.state, self.generation);
+            }
+            self.armed = false;
+        }
     }
 }
 

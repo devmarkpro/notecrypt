@@ -1,0 +1,14 @@
+error[E0624]: associated function `new` is private
+ --> tests/compile_fail/stable_revision_commit_private_construction.rs:8:27
+  |
+8 |       StableRevisionCommit::new(inaccessible(), inaccessible(), inaccessible())
+  |                             ^^^ private associated function
+  |
+ ::: src/session.rs
+  |
+  | /     fn new(
+  | |         request: LocalStreamRevisionRequest,
+  | |         source: &'a mut dyn Read,
+  | |         guard: &'a mut dyn VaultPublicationGuard,
+  | |     ) -> Self {
+  | |_____________- private associated function defined here

@@ -231,6 +231,7 @@ fn allowed_internal_dependencies(package: &str) -> BTreeSet<&'static str> {
         (
             "notecrypt-service",
             &[
+                "notecrypt-core",
                 "notecrypt-store",
                 "notecrypt-replication",
                 "notecrypt-crypto",

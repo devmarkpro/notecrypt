@@ -49,6 +49,21 @@ pub enum Command {
     Backup(BackupVault),
 }
 
+impl Command {
+    pub(crate) const fn resets_inactivity(&self) -> bool {
+        matches!(
+            self,
+            Self::CreateFile(_)
+                | Self::CreateDirectory(_)
+                | Self::ImportFile(_)
+                | Self::EditFile(_)
+                | Self::RenameEntry(_)
+                | Self::MoveEntry(_)
+                | Self::DeleteEntry(_)
+        )
+    }
+}
+
 /// Bounded opaque summary for one logical entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntrySummary {
@@ -159,4 +174,21 @@ pub enum OperationResult {
     WorkspaceOpened(WorkspaceSummary),
     Synchronized(SyncSummary),
     BackedUp(BackupSummary),
+    SecurityTransitionCompleted,
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn entry_summaries_discard_source_vector_spare_capacity() {
+        let mut source = Vec::with_capacity(1_000_000);
+        source.push(EntrySummary::new([7; 16]));
+
+        let summaries = EntrySummaries::try_from_iter(source).unwrap();
+
+        assert_eq!(summaries.len(), 1);
+        assert!(summaries.entries.capacity() <= EntrySummaries::MAX_LEN);
+    }
 }

@@ -246,12 +246,18 @@ impl RepositoryMutation {
         parent: RepositoryEntryId,
         name: &str,
     ) -> Self {
+        Self::create_directory_owned(expected_snapshot, parent, name.to_owned())
+    }
+
+    #[must_use]
+    pub fn create_directory_owned(
+        expected_snapshot: SnapshotId,
+        parent: RepositoryEntryId,
+        name: String,
+    ) -> Self {
         Self {
             expected_snapshot,
-            operation: RepositoryMutationOperation::CreateDirectory {
-                parent,
-                name: name.to_owned(),
-            },
+            operation: RepositoryMutationOperation::CreateDirectory { parent, name },
         }
     }
 
@@ -264,14 +270,33 @@ impl RepositoryMutation {
         new_parent: RepositoryEntryId,
         new_name: &str,
     ) -> Self {
+        Self::rename_owned(
+            expected_snapshot,
+            entry,
+            expected_parent,
+            expected_name.to_owned(),
+            new_parent,
+            new_name.to_owned(),
+        )
+    }
+
+    #[must_use]
+    pub fn rename_owned(
+        expected_snapshot: SnapshotId,
+        entry: RepositoryEntryId,
+        expected_parent: RepositoryEntryId,
+        expected_name: String,
+        new_parent: RepositoryEntryId,
+        new_name: String,
+    ) -> Self {
         Self {
             expected_snapshot,
             operation: RepositoryMutationOperation::Rename {
                 entry,
                 expected_parent,
-                expected_name: expected_name.to_owned(),
+                expected_name,
                 new_parent,
-                new_name: new_name.to_owned(),
+                new_name,
             },
         }
     }
@@ -284,12 +309,29 @@ impl RepositoryMutation {
         expected_name: &str,
         expected_revision: RevisionId,
     ) -> Self {
+        Self::delete_file_owned(
+            expected_snapshot,
+            entry,
+            expected_parent,
+            expected_name.to_owned(),
+            expected_revision,
+        )
+    }
+
+    #[must_use]
+    pub fn delete_file_owned(
+        expected_snapshot: SnapshotId,
+        entry: RepositoryEntryId,
+        expected_parent: RepositoryEntryId,
+        expected_name: String,
+        expected_revision: RevisionId,
+    ) -> Self {
         Self {
             expected_snapshot,
             operation: RepositoryMutationOperation::Delete {
                 entry,
                 expected_parent,
-                expected_name: expected_name.to_owned(),
+                expected_name,
                 expected_revision: Some(expected_revision),
                 expected_kind: RepositoryEntryKind::File,
             },
@@ -303,12 +345,27 @@ impl RepositoryMutation {
         expected_parent: RepositoryEntryId,
         expected_name: &str,
     ) -> Self {
+        Self::delete_directory_owned(
+            expected_snapshot,
+            entry,
+            expected_parent,
+            expected_name.to_owned(),
+        )
+    }
+
+    #[must_use]
+    pub fn delete_directory_owned(
+        expected_snapshot: SnapshotId,
+        entry: RepositoryEntryId,
+        expected_parent: RepositoryEntryId,
+        expected_name: String,
+    ) -> Self {
         Self {
             expected_snapshot,
             operation: RepositoryMutationOperation::Delete {
                 entry,
                 expected_parent,
-                expected_name: expected_name.to_owned(),
+                expected_name,
                 expected_revision: None,
                 expected_kind: RepositoryEntryKind::Directory,
             },
@@ -348,11 +405,16 @@ pub struct StreamRevisionRequest {
 impl StreamRevisionRequest {
     #[must_use]
     pub fn create(expected_snapshot: SnapshotId, name: &str) -> Self {
+        Self::create_owned(expected_snapshot, name.to_owned())
+    }
+
+    #[must_use]
+    pub fn create_owned(expected_snapshot: SnapshotId, name: String) -> Self {
         Self {
             expected_snapshot,
             file_id: None,
             expected_revision: None,
-            name: name.to_owned(),
+            name,
         }
     }
 
@@ -363,11 +425,26 @@ impl StreamRevisionRequest {
         expected_revision: RevisionId,
         name: &str,
     ) -> Self {
+        Self::replace_owned(
+            expected_snapshot,
+            file_id,
+            expected_revision,
+            name.to_owned(),
+        )
+    }
+
+    #[must_use]
+    pub fn replace_owned(
+        expected_snapshot: SnapshotId,
+        file_id: FileId,
+        expected_revision: RevisionId,
+        name: String,
+    ) -> Self {
         Self {
             expected_snapshot,
             file_id: Some(file_id),
             expected_revision: Some(expected_revision),
-            name: name.to_owned(),
+            name,
         }
     }
 }
@@ -494,8 +571,25 @@ impl VaultStore {
             cancel,
             None,
         )?;
-        unlocked.close()?;
-        Ok(store)
+        match unlocked.close() {
+            Ok(()) => Ok(store),
+            Err(primary) => {
+                let cleanup = crate::repository::open_root(local_state_root).and_then(|local| {
+                    crate::compromise::cleanup_owned_target(
+                        &store.layout.repository,
+                        &local,
+                        store.layout.vault,
+                    )
+                });
+                match cleanup {
+                    Ok(()) => Err(primary),
+                    Err(cleanup) => Err(StoreError::CleanupAfterFailure {
+                        primary: Box::new(primary),
+                        cleanup: std::io::Error::other(cleanup.to_string()),
+                    }),
+                }
+            }
+        }
     }
 
     pub fn open(repository_root: &Path, local_state_root: &Path) -> Result<Arc<Self>, StoreError> {
@@ -679,6 +773,9 @@ fn initialize_new_target(
     )?;
     let recovery_key =
         derive_recovery_wrapping_key(&passphrase, &salt, parameters, cancel).map_err(map_random)?;
+    if cancel.load(Ordering::Acquire) {
+        return Err(StoreError::Cancelled);
+    }
     let store = Arc::new(VaultStore::create_new(
         repository_root,
         local_state_root,
@@ -688,11 +785,23 @@ fn initialize_new_target(
         if read_optional(&store.layout.repository, &component(BOOTSTRAP_FILE)?)?.is_some() {
             return Err(StoreError::ImmutableObjectConflict);
         }
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::Cancelled);
+        }
         let root = VaultRootKey::generate(&mut random).map_err(map_random)?;
         let bootstrap = build_bootstrap(vault, kdf, &root, &recovery_key, &mut random)?;
         write_bootstrap(&store, &bootstrap)?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::Cancelled);
+        }
         let authenticated_bootstrap: Arc<[u8]> = Arc::from(bootstrap);
         let keys = initialize_empty_graph(&store, root, device_label, &mut random)?;
+        #[cfg(feature = "test-support")]
+        test_support::run_before_initial_availability_hook();
+        if cancel.load(Ordering::Acquire) {
+            let _ = keys.close();
+            return Err(StoreError::Cancelled);
+        }
         let generation = keys.generation();
         crate::availability::write_initial(&store.layout, &keys, generation, availability)?;
         if availability == VaultAvailability::Inactive {
@@ -810,25 +919,29 @@ impl UnlockedVault {
         )?))
     }
 
-    pub(crate) fn activate_compromise_target(&self) -> Result<(), StoreError> {
-        self.begin_compromise_activation()?;
-        self.complete_compromise_activation_record()?;
-        self.finalize_compromise_activation()
-    }
-
-    fn begin_compromise_activation(&self) -> Result<(), StoreError> {
+    pub(crate) fn begin_compromise_activation(
+        &self,
+        cancel: &AtomicBool,
+        commit_attempt: impl FnOnce(),
+    ) -> Result<(), StoreError> {
         let _mutation = self.store.begin_store_mutation()?;
         let _authorization = self.keys.authorize_publication(self.generation)?;
+        #[cfg(feature = "test-support")]
+        test_support::run_before_compromise_activation_hook();
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::Cancelled);
+        }
+        commit_attempt();
         crate::availability::begin_activation(&self.store.layout, &self.keys, self.generation)
     }
 
-    fn complete_compromise_activation_record(&self) -> Result<(), StoreError> {
+    pub(crate) fn complete_compromise_activation_record(&self) -> Result<(), StoreError> {
         let _mutation = self.store.begin_store_mutation()?;
         let _authorization = self.keys.authorize_publication(self.generation)?;
         crate::availability::complete_activation(&self.store.layout, &self.keys, self.generation)
     }
 
-    fn finalize_compromise_activation(&self) -> Result<(), StoreError> {
+    pub(crate) fn finalize_compromise_activation(&self) -> Result<(), StoreError> {
         let _mutation = self.store.begin_store_mutation()?;
         let _authorization = self.keys.authorize_publication(self.generation)?;
         remove_pending_activation_marker(self.store.as_ref())
@@ -2914,7 +3027,9 @@ mod activation_tests {
             .unwrap();
             assert!(VaultStore::open(&repository_path, &local_path).is_err());
 
-            unlocked.begin_compromise_activation().unwrap();
+            unlocked
+                .begin_compromise_activation(&cancel, || {})
+                .unwrap();
             if crash_after_active {
                 unlocked.complete_compromise_activation_record().unwrap();
             }
@@ -2938,6 +3053,7 @@ mod activation_tests {
 
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    use std::cell::RefCell;
     use std::io::Read;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2948,6 +3064,44 @@ pub mod test_support {
         PublicationGuard, RepositorySnapshot, StoreError, UnlockedVaultLease, VaultRepair,
         VaultRepairAction, VaultStore,
     };
+
+    thread_local! {
+        static BEFORE_INITIAL_AVAILABILITY: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static BEFORE_COMPROMISE_ACTIVATION: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    pub fn install_before_initial_availability_hook(hook: impl FnOnce() + 'static) {
+        BEFORE_INITIAL_AVAILABILITY.with(|slot| {
+            assert!(
+                slot.borrow().is_none(),
+                "initialization hook already installed"
+            );
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+    }
+
+    pub fn install_before_compromise_activation_hook(hook: impl FnOnce() + 'static) {
+        BEFORE_COMPROMISE_ACTIVATION.with(|slot| {
+            assert!(slot.borrow().is_none(), "activation hook already installed");
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+    }
+
+    pub(crate) fn run_before_initial_availability_hook() {
+        BEFORE_INITIAL_AVAILABILITY.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
+    }
+
+    pub(crate) fn run_before_compromise_activation_hook() {
+        BEFORE_COMPROMISE_ACTIVATION.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
+    }
 
     pub fn authorize_repair_cancel_during_graph(
         store: &Arc<VaultStore>,

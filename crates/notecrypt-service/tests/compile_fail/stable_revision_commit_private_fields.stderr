@@ -1,0 +1,17 @@
+error[E0616]: field `request` of struct `StableRevisionCommit` is private
+ --> tests/compile_fail/stable_revision_commit_private_fields.rs:4:19
+  |
+4 |     let _ = value.request;
+  |                   ^^^^^^^ private field
+
+error[E0616]: field `source` of struct `StableRevisionCommit` is private
+ --> tests/compile_fail/stable_revision_commit_private_fields.rs:5:19
+  |
+5 |     let _ = value.source;
+  |                   ^^^^^^ private field
+
+error[E0616]: field `guard` of struct `StableRevisionCommit` is private
+ --> tests/compile_fail/stable_revision_commit_private_fields.rs:6:19
+  |
+6 |     let _ = value.guard;
+  |                   ^^^^^ private field

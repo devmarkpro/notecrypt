@@ -1,0 +1,83 @@
+error[E0277]: the trait bound `RecoverySecretInput: Default` is not satisfied
+ --> tests/compile_fail/no_default.rs:9:23
+  |
+9 |     require_default::<RecoverySecretInput>();
+  |                       ^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `RecoverySecretInput`
+  |
+note: required by a bound in `require_default`
+ --> tests/compile_fail/no_default.rs:6:23
+  |
+6 | fn require_default<T: Default>() {}
+  |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `RecoverySecretPresentation: Default` is not satisfied
+  --> tests/compile_fail/no_default.rs:10:23
+   |
+10 |     require_default::<RecoverySecretPresentation>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `RecoverySecretPresentation`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/no_default.rs:6:23
+   |
+ 6 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `DeviceUnlockSecret: Default` is not satisfied
+  --> tests/compile_fail/no_default.rs:11:23
+   |
+11 |     require_default::<DeviceUnlockSecret>();
+   |                       ^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `DeviceUnlockSecret`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/no_default.rs:6:23
+   |
+ 6 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `PendingRecoveryInitialization: Default` is not satisfied
+  --> tests/compile_fail/no_default.rs:12:23
+   |
+12 |     require_default::<PendingRecoveryInitialization>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `PendingRecoveryInitialization`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/no_default.rs:6:23
+   |
+ 6 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `PendingCompromiseRekey: Default` is not satisfied
+  --> tests/compile_fail/no_default.rs:13:23
+   |
+13 |     require_default::<PendingCompromiseRekey>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `PendingCompromiseRekey`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/no_default.rs:6:23
+   |
+ 6 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `PendingFreshnessAcknowledgement: Default` is not satisfied
+  --> tests/compile_fail/no_default.rs:14:23
+   |
+14 |     require_default::<PendingFreshnessAcknowledgement>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `PendingFreshnessAcknowledgement`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/no_default.rs:6:23
+   |
+ 6 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `FinalSaveGuard: Default` is not satisfied
+  --> tests/compile_fail/no_default.rs:15:23
+   |
+15 |     require_default::<FinalSaveGuard>();
+   |                       ^^^^^^^^^^^^^^ the trait `Default` is not implemented for `FinalSaveGuard`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/no_default.rs:6:23
+   |
+ 6 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`

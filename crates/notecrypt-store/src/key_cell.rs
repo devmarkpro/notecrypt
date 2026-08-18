@@ -36,6 +36,7 @@ use crate::replication::{
 
 pub(crate) struct KeyCell {
     closing: AtomicBool,
+    close_fenced: AtomicBool,
     generation: AtomicU64,
     publication: Mutex<()>,
     material: RwLock<Option<KeyMaterial>>,
@@ -53,6 +54,7 @@ impl KeyCell {
         let derived = derive_vault_keys(&root)?;
         Ok(Self {
             closing: AtomicBool::new(false),
+            close_fenced: AtomicBool::new(false),
             generation: AtomicU64::new(1),
             publication: Mutex::new(()),
             material: RwLock::new(Some(KeyMaterial {
@@ -976,7 +978,7 @@ impl KeyCell {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    fn test_boundary<T>(
+    pub(crate) fn test_boundary<T>(
         &self,
         expected_generation: u64,
         operation: impl FnOnce(&VaultKeys) -> Result<T, StoreError>,
@@ -988,19 +990,32 @@ impl KeyCell {
         self.begin_close_observed(|| {})
     }
 
+    pub(crate) fn revoke(&self) {
+        self.closing.store(true, Ordering::Release);
+    }
+
     pub(crate) fn begin_close_observed(
         &self,
         closing_observed: impl FnOnce(),
     ) -> Result<(), StoreError> {
-        if self
+        let first_revoke = self
             .closing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if first_revoke {
+            closing_observed();
+        }
+        if self.close_fenced.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let _publication = self.publication.lock().map_err(|_| StoreError::Locked)?;
+        if self
+            .close_fenced
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             return Ok(());
         }
-        closing_observed();
-        let _publication = self.publication.lock().map_err(|_| StoreError::Locked)?;
         self.generation
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 value.checked_add(1)
@@ -1023,9 +1038,7 @@ impl KeyCell {
     }
 
     pub(crate) fn close(&self) -> Result<(), StoreError> {
-        if !self.closing.load(Ordering::Acquire) {
-            self.begin_close()?;
-        }
+        self.begin_close()?;
         let mut guard = match self.material.write() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -1231,6 +1244,42 @@ mod tests {
         for worker in workers {
             worker.join().unwrap().unwrap();
         }
+    }
+
+    #[test]
+    fn revoke_rejects_new_boundaries_while_close_fences_prior_publication() {
+        let cell = cell();
+        let generation = cell.generation();
+        let publication = cell.authorize_publication(generation).unwrap();
+        cell.revoke();
+        assert!(matches!(
+            cell.test_boundary(generation, |_| Ok(())),
+            Err(StoreError::Locked)
+        ));
+
+        let closing = Arc::clone(&cell);
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("notecrypt-key-close-publication-fence-eze".to_owned())
+            .spawn(move || {
+                let result = closing.close();
+                completed_tx.send(result).unwrap();
+            })
+            .unwrap();
+        assert!(matches!(
+            completed_rx.recv_timeout(Duration::from_millis(25)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(publication);
+        completed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(matches!(
+            cell.test_boundary(generation, |_| Ok(())),
+            Err(StoreError::Locked)
+        ));
     }
 
     #[test]

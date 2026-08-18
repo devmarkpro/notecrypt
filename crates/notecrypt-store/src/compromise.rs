@@ -81,7 +81,7 @@ pub trait PendingVaultTarget: Send + sealed::PendingVaultTarget {
 
     fn verify_complete(&mut self, cancel: &AtomicBool) -> Result<(), StoreError>;
 
-    fn activate(self: Box<Self>) -> Result<ActivatedVaultTarget, StoreError>;
+    fn activate(self: Box<Self>, cancel: &AtomicBool) -> Result<ActivatedVaultTarget, StoreError>;
 
     fn abort(self: Box<Self>) -> Result<(), StoreError>;
 }
@@ -809,6 +809,16 @@ impl RepositoryPendingVaultTarget {
             (_, Err(error)) => Err(error),
         }
     }
+
+    fn fail_before_activation(&mut self, primary: StoreError) -> StoreError {
+        match self.cleanup() {
+            Ok(()) => primary,
+            Err(cleanup) => StoreError::CleanupAfterFailure {
+                primary: Box::new(primary),
+                cleanup: std::io::Error::other(cleanup.to_string()),
+            },
+        }
+    }
 }
 
 impl PendingVaultTarget for RepositoryPendingVaultTarget {
@@ -833,17 +843,42 @@ impl PendingVaultTarget for RepositoryPendingVaultTarget {
         result
     }
 
-    fn activate(mut self: Box<Self>) -> Result<ActivatedVaultTarget, StoreError> {
+    fn activate(
+        mut self: Box<Self>,
+        cancel: &AtomicBool,
+    ) -> Result<ActivatedVaultTarget, StoreError> {
         if !self.verified || self.poisoned {
-            return Err(StoreError::InvalidCapability);
+            return Err(self.fail_before_activation(StoreError::InvalidCapability));
         }
-        self.unlocked
+        if cancel.load(Ordering::Acquire) {
+            return Err(self.fail_before_activation(StoreError::Cancelled));
+        }
+        let cleanup_required = &mut self.cleanup_required;
+        let unlocked = self
+            .unlocked
             .as_ref()
-            .ok_or(StoreError::InvalidCapability)?
-            .activate_compromise_target()?;
-        self.cleanup_required = false;
+            .ok_or(StoreError::InvalidCapability)?;
+        let begin_result = unlocked.begin_compromise_activation(cancel, || {
+            *cleanup_required = false;
+        });
+        if *cleanup_required {
+            return match begin_result {
+                Ok(()) => Err(self.fail_before_activation(StoreError::InvalidCapability)),
+                Err(primary) => Err(self.fail_before_activation(primary)),
+            };
+        }
+        // The Activating replacement may already be visible even when its
+        // final directory sync fails. From the commit attempt onward recovery
+        // owns completion, so pending cleanup must never delete this target.
+        begin_result.map_err(|_| StoreError::DurabilityPending)?;
+        unlocked
+            .complete_compromise_activation_record()
+            .and_then(|()| unlocked.finalize_compromise_activation())
+            .map_err(|_| StoreError::DurabilityPending)?;
         if let Some(unlocked) = self.unlocked.take() {
-            unlocked.close()?;
+            unlocked
+                .close()
+                .map_err(|_| StoreError::DurabilityPending)?;
         }
         Ok(ActivatedVaultTarget { vault: self.vault })
     }

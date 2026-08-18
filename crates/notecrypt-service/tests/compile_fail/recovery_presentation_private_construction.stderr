@@ -1,0 +1,7 @@
+error[E0560]: struct `RecoverySecretPresentation` has no field named `generation`
+ --> tests/compile_fail/recovery_presentation_private_construction.rs:5:9
+  |
+5 |         generation: 1,
+  |         ^^^^^^^^^^ `RecoverySecretPresentation` does not have this field
+  |
+  = note: all struct fields are already assigned

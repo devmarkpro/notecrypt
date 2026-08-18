@@ -3,6 +3,10 @@ use thiserror::Error;
 /// Stable failures produced by deterministic domain operations.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CoreError {
+    #[error("allocation failed while retaining a bounded logical path")]
+    AllocationFailed,
+    #[error("the logical path exceeds a configured capacity")]
+    CapacityExceeded,
     #[error("the logical path is empty")]
     EmptyPath,
     #[error("absolute logical paths are not allowed")]

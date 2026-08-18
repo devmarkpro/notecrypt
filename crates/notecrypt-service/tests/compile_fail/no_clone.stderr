@@ -1,0 +1,83 @@
+error[E0277]: the trait bound `RecoverySecretInput: Clone` is not satisfied
+ --> tests/compile_fail/no_clone.rs:9:21
+  |
+9 |     require_clone::<RecoverySecretInput>();
+  |                     ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoverySecretInput`
+  |
+note: required by a bound in `require_clone`
+ --> tests/compile_fail/no_clone.rs:6:21
+  |
+6 | fn require_clone<T: Clone>() {}
+  |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `RecoverySecretPresentation: Clone` is not satisfied
+  --> tests/compile_fail/no_clone.rs:10:21
+   |
+10 |     require_clone::<RecoverySecretPresentation>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RecoverySecretPresentation`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/no_clone.rs:6:21
+   |
+ 6 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `DeviceUnlockSecret: Clone` is not satisfied
+  --> tests/compile_fail/no_clone.rs:11:21
+   |
+11 |     require_clone::<DeviceUnlockSecret>();
+   |                     ^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `DeviceUnlockSecret`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/no_clone.rs:6:21
+   |
+ 6 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `PendingRecoveryInitialization: Clone` is not satisfied
+  --> tests/compile_fail/no_clone.rs:12:21
+   |
+12 |     require_clone::<PendingRecoveryInitialization>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `PendingRecoveryInitialization`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/no_clone.rs:6:21
+   |
+ 6 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `PendingCompromiseRekey: Clone` is not satisfied
+  --> tests/compile_fail/no_clone.rs:13:21
+   |
+13 |     require_clone::<PendingCompromiseRekey>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `PendingCompromiseRekey`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/no_clone.rs:6:21
+   |
+ 6 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `PendingFreshnessAcknowledgement: Clone` is not satisfied
+  --> tests/compile_fail/no_clone.rs:14:21
+   |
+14 |     require_clone::<PendingFreshnessAcknowledgement>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `PendingFreshnessAcknowledgement`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/no_clone.rs:6:21
+   |
+ 6 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `FinalSaveGuard: Clone` is not satisfied
+  --> tests/compile_fail/no_clone.rs:15:21
+   |
+15 |     require_clone::<FinalSaveGuard>();
+   |                     ^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `FinalSaveGuard`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/no_clone.rs:6:21
+   |
+ 6 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`

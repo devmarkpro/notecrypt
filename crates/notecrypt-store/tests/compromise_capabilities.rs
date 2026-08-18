@@ -110,7 +110,7 @@ fn unlocked_source_streams_into_a_distinct_empty_physical_target_end_to_end() {
     }
     target.verify_complete(&cancel).unwrap();
     assert!(VaultStore::open(&target_repository_path, &target_local_path).is_err());
-    let activated = target.activate().unwrap();
+    let activated = target.activate(&cancel).unwrap();
     assert_ne!(activated.vault_id(), source_vault);
 
     let target_store = VaultStore::open(&target_repository_path, &target_local_path).unwrap();
@@ -347,7 +347,7 @@ fn verified_target_is_parentless_and_contains_no_source_object_or_logical_identi
         target.stage_entry(source.as_mut(), entry, &cancel).unwrap();
     }
     target.verify_complete(&cancel).unwrap();
-    target.activate().unwrap();
+    target.activate(&cancel).unwrap();
 
     let target_objects = object_ids(&target_repository_path);
     assert_eq!(target_objects.len(), 6);
@@ -464,7 +464,7 @@ fn authenticated_directory_hierarchy_is_rebuilt_with_new_logical_identities() {
         target.stage_entry(source.as_mut(), entry, &cancel).unwrap();
     }
     target.verify_complete(&cancel).unwrap();
-    target.activate().unwrap();
+    target.activate(&cancel).unwrap();
 
     let target_store = VaultStore::open(&target_repository_path, &target_local_path).unwrap();
     let target_unlocked = target_store.unlock_recovery(passphrase(), &cancel).unwrap();
@@ -565,7 +565,7 @@ fn empty_source_requires_and_accepts_authenticated_enumeration_completion() {
             .unwrap();
     }
     complete.verify_complete(&cancel).unwrap();
-    complete.activate().unwrap();
+    complete.activate(&cancel).unwrap();
 
     let reopened = VaultStore::open(&complete_repository_path, &complete_local_path).unwrap();
     let unlocked = reopened.unlock_recovery(passphrase(), &cancel).unwrap();
@@ -704,7 +704,7 @@ fn partial_activation_fails_and_cleans_the_owned_target() {
         Err(StoreError::InvalidCapability)
     ));
     assert!(matches!(
-        target.activate(),
+        target.activate(&cancel),
         Err(StoreError::InvalidCapability)
     ));
     assert!(root_is_empty(&target_repository_path));

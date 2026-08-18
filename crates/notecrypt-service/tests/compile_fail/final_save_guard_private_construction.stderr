@@ -1,0 +1,25 @@
+error[E0451]: fields `service`, `state`, `generation` and `armed` of struct `FinalSaveGuard` are private
+  --> tests/compile_fail/final_save_guard_private_construction.rs:9:9
+   |
+ 8 |     FinalSaveGuard {
+   |     -------------- in this type
+ 9 |         service: inaccessible(),
+   |         ^^^^^^^ private field
+10 |         state: inaccessible(),
+   |         ^^^^^ private field
+11 |         generation: 1,
+   |         ^^^^^^^^^^ private field
+12 |         armed: true,
+   |         ^^^^^ private field
+
+error: type `notecrypt_service::service::ServiceInner` is private
+ --> tests/compile_fail/final_save_guard_private_construction.rs:9:18
+  |
+9 |         service: inaccessible(),
+  |                  ^^^^^^^^^^^^^^ private type
+
+error: type `notecrypt_service::operation::OperationState` is private
+  --> tests/compile_fail/final_save_guard_private_construction.rs:10:16
+   |
+10 |         state: inaccessible(),
+   |                ^^^^^^^^^^^^^^ private type

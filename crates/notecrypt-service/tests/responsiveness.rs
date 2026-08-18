@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -343,13 +343,11 @@ impl OperationExecutor for BackendBoundaryExecutor {
         _command: Command,
         context: &OperationContext,
     ) -> Result<OperationResult, ServiceError> {
-        context.with_cancellation_flag(|cancel: &AtomicBool| {
-            self.entered.send(()).expect("test observer is alive");
-            self.gate.wait();
-            self.observed
-                .send(cancel.load(Ordering::Acquire))
-                .expect("test observer is alive");
-        });
+        self.entered.send(()).expect("test observer is alive");
+        self.gate.wait();
+        self.observed
+            .send(context.is_cancelled())
+            .expect("test observer is alive");
         Ok(OperationResult::Entries(EntrySummaries::empty()))
     }
 }

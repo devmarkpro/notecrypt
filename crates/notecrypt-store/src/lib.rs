@@ -55,11 +55,14 @@ pub use reachability::{
     PendingUnprovableRemote, VerifiedReachableHead,
 };
 pub use recovery::RecoveryOutcome;
+#[cfg(feature = "test-support")]
+pub use replication::test_support as replication_test_support;
 pub use replication::{
     CommitReplicatedSnapshot, ImportedObjectKind, ImportedObjectMetadata, QuarantineImport,
-    ReplicationBudget, ReplicationLease, ReplicationLimits,
+    ReplicationBudget, ReplicationCancellation, ReplicationCancellationProbe, ReplicationLease,
+    ReplicationLimits,
 };
-pub use repository::{UnlockedVault, VaultStore};
+pub use repository::{UnlockedVault, VaultRevocationHandle, VaultStore};
 #[cfg(feature = "test-support")]
 pub use rollback::test_support as rollback_test_support;
 pub use transaction::PublicationGuard;
