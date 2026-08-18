@@ -15,7 +15,9 @@ members = [
     "apps/notecrypt-cli",
     "benches",
     "tests/notecrypt-e2e",
+    "tests/notecrypt-crypto-format",
 ]
+exclude = ["fuzz/format"]
 
 [workspace.package]
 version = "0.1.0"

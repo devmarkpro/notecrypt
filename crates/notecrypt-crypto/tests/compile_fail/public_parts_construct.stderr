@@ -1,0 +1,14 @@
+error[E0451]: fields `identity`, `nonce`, `ciphertext` and `tag` of struct `PublicAeadEnvelopeParts` are private
+  --> tests/compile_fail/public_parts_construct.rs:5:9
+   |
+ 4 |     let _ = PublicAeadEnvelopeParts {
+   |             ----------------------- in this type
+ 5 |         identity: PublicEnvelopeIdentity {
+   |         ^^^^^^^^ private field
+...
+12 |         nonce: [0; 24],
+   |         ^^^^^ private field
+13 |         ciphertext: vec![0; 32],
+   |         ^^^^^^^^^^ private field
+14 |         tag: [0; 16],
+   |         ^^^ private field

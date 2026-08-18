@@ -60,6 +60,51 @@ fn checked_parts_round_trip_without_exposing_private_fields() {
 }
 
 #[test]
+fn consuming_public_parts_preserve_ciphertext_allocation() {
+    let mut ciphertext = Vec::with_capacity(64);
+    ciphertext.extend_from_slice(&[4; 8]);
+    let ciphertext_pointer = ciphertext.as_ptr();
+    let ciphertext_capacity = ciphertext.capacity();
+    let envelope_parts = AeadEnvelopeParts::try_new(
+        identity(TreeContext::OBJECT_KIND),
+        &[3; 24],
+        ciphertext,
+        &[5; 16],
+    )
+    .unwrap();
+
+    let public_parts = envelope_parts.into_public_parts();
+    let (checked_identity, nonce, ciphertext, tag) = public_parts.into_components();
+
+    assert!(checked_identity == identity(TreeContext::OBJECT_KIND));
+    assert_eq!(nonce, [3; 24]);
+    assert_eq!(ciphertext, [4; 8]);
+    assert_eq!(tag, [5; 16]);
+    assert_eq!(ciphertext.as_ptr(), ciphertext_pointer);
+    assert_eq!(ciphertext.capacity(), ciphertext_capacity);
+}
+
+#[test]
+fn public_parts_rebuild_through_checked_typed_boundaries() {
+    let envelope_parts = parts(TreeContext::OBJECT_KIND, 8);
+    let (identity, nonce, ciphertext, tag) = envelope_parts.into_public_parts().into_components();
+    let rebuilt = AeadEnvelopeParts::try_new(identity, &nonce, ciphertext, &tag).unwrap();
+    let typed = TreeEnvelope::try_from_parts(rebuilt).unwrap();
+
+    assert_eq!(typed.parts().ciphertext(), &[4; 8]);
+
+    let snapshot =
+        SnapshotEnvelope::try_new(parts(SnapshotContext::OBJECT_KIND, 10), &[6; 32]).unwrap();
+    let (encrypted, outer_authenticator) = snapshot.into_parts();
+    let (identity, nonce, ciphertext, tag) = encrypted.into_public_parts().into_components();
+    let rebuilt = AeadEnvelopeParts::try_new(identity, &nonce, ciphertext, &tag).unwrap();
+    let rebuilt_snapshot = SnapshotEnvelope::try_new(rebuilt, &outer_authenticator).unwrap();
+
+    assert_eq!(rebuilt_snapshot.outer_authenticator(), &[6; 32]);
+    assert_eq!(rebuilt_snapshot.encrypted_parts().ciphertext(), &[4; 10]);
+}
+
+#[test]
 fn typed_envelopes_reject_wrong_kinds_and_lengths_without_large_allocations() {
     macro_rules! assert_wrong_kind {
         ($envelope:ty, $kind:expr, $length:expr) => {{

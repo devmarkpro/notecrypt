@@ -186,6 +186,18 @@ pub struct AeadEnvelopeParts {
     tag: [u8; 16],
 }
 
+/// Owned public fields transferred from a structurally checked AEAD envelope.
+///
+/// This transfer preserves the checks performed by [`AeadEnvelopeParts::try_new`].
+/// A receiving crypto boundary must still rebuild [`AeadEnvelopeParts`] and use the typed
+/// envelope constructor to validate the expected object kind and ciphertext length.
+pub struct PublicAeadEnvelopeParts {
+    identity: PublicEnvelopeIdentity,
+    nonce: [u8; 24],
+    ciphertext: Vec<u8>,
+    tag: [u8; 16],
+}
+
 impl AeadEnvelopeParts {
     pub fn try_new(
         identity: PublicEnvelopeIdentity,
@@ -228,6 +240,25 @@ impl AeadEnvelopeParts {
     #[must_use]
     pub const fn tag(&self) -> &[u8; 16] {
         &self.tag
+    }
+
+    /// Transfers checked public fields without copying the ciphertext allocation.
+    #[must_use]
+    pub fn into_public_parts(self) -> PublicAeadEnvelopeParts {
+        PublicAeadEnvelopeParts {
+            identity: self.identity,
+            nonce: self.nonce,
+            ciphertext: self.ciphertext,
+            tag: self.tag,
+        }
+    }
+}
+
+impl PublicAeadEnvelopeParts {
+    /// Consumes the transfer value and returns its owned public components.
+    #[must_use]
+    pub fn into_components(self) -> (PublicEnvelopeIdentity, [u8; 24], Vec<u8>, [u8; 16]) {
+        (self.identity, self.nonce, self.ciphertext, self.tag)
     }
 }
 

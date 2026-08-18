@@ -207,6 +207,10 @@ fn allowed_internal_dependencies(package: &str) -> BTreeSet<&'static str> {
     let rules: BTreeMap<&str, &[&str]> = BTreeMap::from([
         ("notecrypt-core", &[][..]),
         ("notecrypt-format", &[][..]),
+        (
+            "notecrypt-crypto-format-tests",
+            &["notecrypt-format", "notecrypt-crypto"][..],
+        ),
         ("notecrypt-crypto", &[][..]),
         (
             "notecrypt-store",

@@ -1,0 +1,74 @@
+error[E0277]: can't compare `ChunkFingerprint` with `ChunkFingerprint`
+ --> tests/compile_fail/chunk_fingerprint_equality.rs:7:26
+  |
+7 |     require_partial_eq::<ChunkFingerprint>();
+  |                          ^^^^^^^^^^^^^^^^ no implementation for `ChunkFingerprint == ChunkFingerprint`
+  |
+  = help: the trait `PartialEq` is not implemented for `ChunkFingerprint`
+note: required by a bound in `require_partial_eq`
+ --> tests/compile_fail/chunk_fingerprint_equality.rs:3:26
+  |
+3 | fn require_partial_eq<T: PartialEq>() {}
+  |                          ^^^^^^^^^ required by this bound in `require_partial_eq`
+
+error[E0277]: the trait bound `ChunkFingerprint: Eq` is not satisfied
+ --> tests/compile_fail/chunk_fingerprint_equality.rs:8:18
+  |
+8 |     require_eq::<ChunkFingerprint>();
+  |                  ^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `ChunkFingerprint`
+  |
+note: required by a bound in `require_eq`
+ --> tests/compile_fail/chunk_fingerprint_equality.rs:4:18
+  |
+4 | fn require_eq<T: Eq>() {}
+  |                  ^^ required by this bound in `require_eq`
+
+error[E0277]: can't compare `EncryptedChunkDescriptor` with `EncryptedChunkDescriptor`
+ --> tests/compile_fail/chunk_fingerprint_equality.rs:9:26
+  |
+9 |     require_partial_eq::<EncryptedChunkDescriptor>();
+  |                          ^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `EncryptedChunkDescriptor == EncryptedChunkDescriptor`
+  |
+  = help: the trait `PartialEq` is not implemented for `EncryptedChunkDescriptor`
+note: required by a bound in `require_partial_eq`
+ --> tests/compile_fail/chunk_fingerprint_equality.rs:3:26
+  |
+3 | fn require_partial_eq<T: PartialEq>() {}
+  |                          ^^^^^^^^^ required by this bound in `require_partial_eq`
+
+error[E0277]: the trait bound `EncryptedChunkDescriptor: Eq` is not satisfied
+  --> tests/compile_fail/chunk_fingerprint_equality.rs:10:18
+   |
+10 |     require_eq::<EncryptedChunkDescriptor>();
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `EncryptedChunkDescriptor`
+   |
+note: required by a bound in `require_eq`
+  --> tests/compile_fail/chunk_fingerprint_equality.rs:4:18
+   |
+ 4 | fn require_eq<T: Eq>() {}
+   |                  ^^ required by this bound in `require_eq`
+
+error[E0277]: can't compare `EncryptedChunk` with `EncryptedChunk`
+  --> tests/compile_fail/chunk_fingerprint_equality.rs:11:26
+   |
+11 |     require_partial_eq::<EncryptedChunk>();
+   |                          ^^^^^^^^^^^^^^ no implementation for `EncryptedChunk == EncryptedChunk`
+   |
+   = help: the trait `PartialEq` is not implemented for `EncryptedChunk`
+note: required by a bound in `require_partial_eq`
+  --> tests/compile_fail/chunk_fingerprint_equality.rs:3:26
+   |
+ 3 | fn require_partial_eq<T: PartialEq>() {}
+   |                          ^^^^^^^^^ required by this bound in `require_partial_eq`
+
+error[E0277]: the trait bound `EncryptedChunk: Eq` is not satisfied
+  --> tests/compile_fail/chunk_fingerprint_equality.rs:12:18
+   |
+12 |     require_eq::<EncryptedChunk>();
+   |                  ^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `EncryptedChunk`
+   |
+note: required by a bound in `require_eq`
+  --> tests/compile_fail/chunk_fingerprint_equality.rs:4:18
+   |
+ 4 | fn require_eq<T: Eq>() {}
+   |                  ^^ required by this bound in `require_eq`

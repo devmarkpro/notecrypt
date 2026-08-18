@@ -679,6 +679,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "notecrypt-crypto-format-tests"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "notecrypt-crypto",
+ "notecrypt-format",
+]
+
+[[package]]
 name = "notecrypt-device-unlock"
 version = "0.1.0"
 dependencies = [
@@ -702,6 +711,14 @@ dependencies = [
 [[package]]
 name = "notecrypt-format"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+ "minicbor",
+ "thiserror",
+ "toml",
+ "trybuild",
+ "zeroize",
+]
 
 [[package]]
 name = "notecrypt-replication"
