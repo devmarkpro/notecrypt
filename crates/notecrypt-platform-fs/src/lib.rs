@@ -11,6 +11,32 @@ use cap_std::fs::{Dir, DirBuilder, File, OpenOptions};
 use cap_std::fs::{DirBuilderExt, PermissionsExt};
 use cap_std::time::SystemTime;
 
+mod external;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod external_test_support {
+    use crate::{ExportTransaction, ExternalFileSet};
+
+    pub fn inject_cleanup_failures(transaction: &mut ExportTransaction, failures: usize) {
+        transaction.cleanup_failures_remaining = failures;
+    }
+
+    pub fn inject_publish_panic(transaction: &mut ExportTransaction) {
+        transaction.panic_on_publish = true;
+    }
+
+    pub fn inject_begin_failure(files: &ExternalFileSet, cleanup_failures: usize) {
+        files.inject_begin_failure(cleanup_failures);
+    }
+}
+
+pub use external::{
+    ExportBeginError, ExportCleanupPending, ExportOverwrite, ExportPublicationEffect,
+    ExportPublishAttemptError, ExportPublishError, ExportTransaction, ExternalFileSet,
+    StableImport, StableImportValidator,
+};
+
 /// A validated single physical name accepted by capability-relative operations.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PhysicalComponent(Box<str>);
@@ -128,10 +154,17 @@ impl Directory {
         #[cfg(unix)]
         builder.mode(0o700);
         self.inner.create_dir_with(name.as_path(), &builder)?;
-        match self
-            .open_dir_nofollow(name)
-            .and_then(|directory| directory.verify_private().map(|()| directory))
-        {
+        let initialized = match self.open_dir_nofollow(name) {
+            Ok(directory) => {
+                #[cfg(windows)]
+                let prepared = windows::make_private_directory(&directory.inner);
+                #[cfg(not(windows))]
+                let prepared = Ok(());
+                prepared.and_then(|()| directory.verify_private().map(|()| directory))
+            }
+            Err(error) => Err(error),
+        };
+        match initialized {
             Ok(directory) => Ok(directory),
             Err(primary) => match self.inner.remove_dir(name.as_path()) {
                 Ok(()) => Err(primary),
@@ -303,6 +336,10 @@ impl Directory {
                 "directory permissions are not private",
             ));
         }
+        #[cfg(windows)]
+        windows::verify_private_directory(&self.inner)?;
+        #[cfg(not(unix))]
+        let _ = metadata;
         Ok(())
     }
 
@@ -416,7 +453,13 @@ impl Directory {
         destination_directory: &Self,
         destination: &PhysicalComponent,
     ) -> io::Result<()> {
-        self.replace_opened_atomic_checked(source, staged, destination_directory, destination, None)
+        self.replace_opened_atomic_checked(
+            source,
+            staged,
+            destination_directory,
+            destination.as_path(),
+            None,
+        )
     }
 
     pub fn replace_opened_atomic_if_destination_matches(
@@ -431,7 +474,7 @@ impl Directory {
             source,
             staged,
             destination_directory,
-            destination,
+            destination.as_path(),
             Some(expected_destination),
         )
     }
@@ -441,7 +484,7 @@ impl Directory {
         source: &FileCapability,
         staged: &PhysicalComponent,
         destination_directory: &Self,
-        destination: &PhysicalComponent,
+        destination: &Path,
         expected_destination: Option<&FileCapability>,
     ) -> io::Result<()> {
         self.verify_private()?;
@@ -458,7 +501,7 @@ impl Directory {
             ));
         }
         if let Some(expected) = expected_destination {
-            let named_destination = destination_directory.open_file_nofollow(destination)?;
+            let named_destination = destination_directory.open_file_nofollow_path(destination)?;
             if !expected.same_file(&named_destination)? {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -474,7 +517,7 @@ impl Directory {
             destination,
         )?;
         source.sync_all()?;
-        let published = destination_directory.open_file_nofollow(destination)?;
+        let published = destination_directory.open_file_nofollow_path(destination)?;
         if !source.same_file(&published)? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -482,6 +525,15 @@ impl Directory {
             ));
         }
         Ok(())
+    }
+
+    fn open_file_nofollow_path(&self, name: &Path) -> io::Result<FileCapability> {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let inner = self.inner.open_with(name, &options)?;
+        let file = FileCapability { inner };
+        file.require_single_regular_link()?;
+        Ok(file)
     }
 
     pub fn remove_opened_file_if_matches(
@@ -691,14 +743,38 @@ fn random_probe_component() -> io::Result<PhysicalComponent> {
     PhysicalComponent::try_new(&value)
 }
 
+struct NoReplaceFailure {
+    primary: io::Error,
+    destination_may_be_visible: bool,
+}
+
+fn finish_linked_publication_after_source_remove_failure(
+    primary: io::Error,
+    rollback: io::Result<()>,
+    rollback_sync: io::Result<()>,
+) -> NoReplaceFailure {
+    match (rollback, rollback_sync) {
+        (Ok(()), Ok(())) => NoReplaceFailure {
+            primary,
+            destination_may_be_visible: false,
+        },
+        (Err(cleanup), _) | (_, Err(cleanup)) => NoReplaceFailure {
+            primary: io::Error::other(format!(
+                "publication failed and destination rollback is unproven: {primary}; {cleanup}"
+            )),
+            destination_may_be_visible: true,
+        },
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn rename_no_replace(
+fn rename_no_replace_observed(
     source_file: &FileCapability,
     source_directory: &Dir,
     source: &Path,
     destination_directory: &Dir,
     destination: &Path,
-) -> io::Result<()> {
+) -> Result<(), NoReplaceFailure> {
     use std::os::fd::AsRawFd as _;
 
     // `AT_EMPTY_PATH` requires CAP_DAC_READ_SEARCH and therefore cannot be
@@ -714,19 +790,21 @@ fn rename_no_replace(
         destination,
         rustix::fs::AtFlags::SYMLINK_FOLLOW,
     )
-    .map_err(io::Error::from)?;
+    .map_err(io::Error::from)
+    .map_err(|primary| NoReplaceFailure {
+        primary,
+        destination_may_be_visible: false,
+    })?;
     if let Err(primary) = source_directory.remove_file(source) {
-        let cleanup = destination_directory.remove_file(destination);
-        let sync = destination_directory
-            .try_clone()?
-            .into_std_file()
-            .sync_all();
-        return match (cleanup, sync) {
-            (Ok(()), Ok(())) => Err(primary),
-            (Err(cleanup), _) | (_, Err(cleanup)) => Err(io::Error::other(format!(
-                "publication failed and destination cleanup failed: {primary}; {cleanup}"
-            ))),
-        };
+        let rollback = destination_directory.remove_file(destination);
+        let rollback_sync = destination_directory
+            .try_clone()
+            .and_then(|directory| directory.into_std_file().sync_all());
+        return Err(finish_linked_publication_after_source_remove_failure(
+            primary,
+            rollback,
+            rollback_sync,
+        ));
     }
     Ok(())
 }
@@ -750,32 +828,34 @@ fn published_matches_exact_source(
 }
 
 #[cfg(target_vendor = "apple")]
-fn rename_no_replace(
+fn rename_no_replace_observed(
     source_file: &FileCapability,
     source_directory: &Dir,
     source: &Path,
     destination_directory: &Dir,
     destination: &Path,
-) -> io::Result<()> {
+) -> Result<(), NoReplaceFailure> {
     rustix::fs::fclonefileat(
         &source_file.inner,
         destination_directory,
         destination,
         rustix::fs::CloneFlags::empty(),
     )
-    .map_err(io::Error::from)?;
+    .map_err(io::Error::from)
+    .map_err(|primary| NoReplaceFailure {
+        primary,
+        destination_may_be_visible: false,
+    })?;
     if let Err(primary) = source_directory.remove_file(source) {
-        let cleanup = destination_directory.remove_file(destination);
-        let sync = destination_directory
-            .try_clone()?
-            .into_std_file()
-            .sync_all();
-        return match (cleanup, sync) {
-            (Ok(()), Ok(())) => Err(primary),
-            (Err(cleanup), _) | (_, Err(cleanup)) => Err(io::Error::other(format!(
-                "publication failed and destination cleanup failed: {primary}; {cleanup}"
-            ))),
-        };
+        let rollback = destination_directory.remove_file(destination);
+        let rollback_sync = destination_directory
+            .try_clone()
+            .and_then(|directory| directory.into_std_file().sync_all());
+        return Err(finish_linked_publication_after_source_remove_failure(
+            primary,
+            rollback,
+            rollback_sync,
+        ));
     }
     Ok(())
 }
@@ -784,28 +864,53 @@ fn rename_no_replace(
     unix,
     not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
 ))]
-fn rename_no_replace(
+fn rename_no_replace_observed(
     _source_file: &FileCapability,
     _source_directory: &Dir,
     _source: &Path,
     _destination_directory: &Dir,
     _destination: &Path,
-) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "atomic no-replace rename is unavailable",
-    ))
+) -> Result<(), NoReplaceFailure> {
+    Err(NoReplaceFailure {
+        primary: io::Error::new(
+            io::ErrorKind::Unsupported,
+            "atomic no-replace rename is unavailable",
+        ),
+        destination_may_be_visible: false,
+    })
 }
 
 #[cfg(windows)]
-fn rename_no_replace(
+fn rename_no_replace_observed(
     source_file: &FileCapability,
     _source_directory: &Dir,
     _source: &Path,
     destination_directory: &Dir,
     destination: &Path,
+) -> Result<(), NoReplaceFailure> {
+    windows::rename_by_handle(source_file, destination_directory, destination, false).map_err(
+        |primary| NoReplaceFailure {
+            primary,
+            destination_may_be_visible: false,
+        },
+    )
+}
+
+fn rename_no_replace(
+    source_file: &FileCapability,
+    source_directory: &Dir,
+    source: &Path,
+    destination_directory: &Dir,
+    destination: &Path,
 ) -> io::Result<()> {
-    windows::rename_by_handle(source_file, destination_directory, destination, false)
+    rename_no_replace_observed(
+        source_file,
+        source_directory,
+        source,
+        destination_directory,
+        destination,
+    )
+    .map_err(|failure| failure.primary)
 }
 
 #[cfg(windows)]
@@ -814,14 +919,9 @@ fn rename_replace(
     _source_directory: &Dir,
     _source: &Path,
     destination_directory: &Directory,
-    destination: &PhysicalComponent,
+    destination: &Path,
 ) -> io::Result<()> {
-    windows::rename_by_handle(
-        source_file,
-        &destination_directory.inner,
-        destination.as_path(),
-        true,
-    )
+    windows::rename_by_handle(source_file, &destination_directory.inner, destination, true)
 }
 
 #[cfg(not(windows))]
@@ -830,25 +930,36 @@ fn rename_replace(
     source_directory: &Dir,
     source: &Path,
     destination_directory: &Directory,
-    destination: &PhysicalComponent,
+    destination: &Path,
 ) -> io::Result<()> {
-    source_directory.rename(source, &destination_directory.inner, destination.as_path())
+    source_directory.rename(source, &destination_directory.inner, destination)
 }
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows {
+    use std::ffi::c_void;
     use std::io;
     use std::mem::{offset_of, size_of};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
 
     use cap_std::fs::Dir;
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
+        SetEntriesInAclW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid,
+        GetAce, GetSecurityDescriptorControl, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_BASIC_INFO, FILE_RENAME_INFO, FileBasicInfo, FileRenameInfo, GetDiskFreeSpaceExW,
-        GetFileInformationByHandleEx, GetFinalPathNameByHandleW, LOCKFILE_EXCLUSIVE_LOCK,
-        LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, SetFileInformationByHandle, UnlockFileEx,
-        VOLUME_NAME_DOS,
+        FILE_ALL_ACCESS, FILE_BASIC_INFO, FILE_RENAME_INFO, FileBasicInfo, FileRenameInfo,
+        GetDiskFreeSpaceExW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+        LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, SetFileInformationByHandle,
+        UnlockFileEx, VOLUME_NAME_DOS,
     };
     #[cfg(feature = "benchmark-support")]
     use windows_sys::Win32::System::IO::DeviceIoControl;
@@ -857,6 +968,181 @@ mod windows {
     use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
 
     use super::FileCapability;
+
+    struct LocalAllocation(*mut c_void);
+
+    impl Drop for LocalAllocation {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: the pointer was returned by a Windows API documented to require
+                // `LocalFree`, and this guard owns the only cleanup of that allocation.
+                unsafe {
+                    LocalFree(self.0);
+                }
+            }
+        }
+    }
+
+    pub(super) fn make_private_directory(directory: &Dir) -> io::Result<()> {
+        let handle = directory.as_raw_handle().cast();
+        let (owner, descriptor) = read_owner(handle)?;
+        let _descriptor = LocalAllocation(descriptor.cast());
+        let trustee = TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: owner.cast(),
+        };
+        let access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+            Trustee: trustee,
+        };
+        let mut acl: *mut ACL = std::ptr::null_mut();
+        // SAFETY: `access` is live for the call, the owner SID remains live through
+        // `_descriptor`, and `acl` is a valid output pointer.
+        let status = unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) };
+        if status != ERROR_SUCCESS {
+            return Err(win32_error(status));
+        }
+        let _acl = LocalAllocation(acl.cast());
+        // SAFETY: `handle` is a live directory handle, and `acl` remains live through `_acl`.
+        let status = unsafe {
+            SetSecurityInfo(
+                handle,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(win32_error(status));
+        }
+        verify_private_directory(directory)
+    }
+
+    pub(super) fn verify_private_directory(directory: &Dir) -> io::Result<()> {
+        let handle = directory.as_raw_handle().cast();
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut acl: *mut ACL = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: all output pointers are valid and `handle` remains live for the call.
+        let status = unsafe {
+            GetSecurityInfo(
+                handle,
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                &mut acl,
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(win32_error(status));
+        }
+        let _descriptor = LocalAllocation(descriptor.cast());
+        if owner.is_null() || acl.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private directory has no owner-only DACL",
+            ));
+        }
+        let mut control = 0_u16;
+        let mut revision = 0_u32;
+        // SAFETY: `descriptor` remains live through `_descriptor`, and both outputs are valid.
+        if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+            || control & SE_DACL_PROTECTED == 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private directory DACL inherits permissions",
+            ));
+        }
+        // SAFETY: `acl` is part of the live descriptor allocation.
+        let ace_count = unsafe { (*acl).AceCount };
+        if ace_count != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private directory DACL is not owner-only",
+            ));
+        }
+        let mut ace: *mut c_void = std::ptr::null_mut();
+        // SAFETY: the verified ACL contains one entry and `ace` is a valid output pointer.
+        if unsafe { GetAce(acl, 0, &mut ace) } == 0 || ace.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
+        // SAFETY: the only supported owner entry must be an ACCESS_ALLOWED_ACE, checked before
+        // reading its mask and trailing SID.
+        let (ace_type, ace_flags, mask, sid) = unsafe {
+            (
+                (*allowed).Header.AceType,
+                u32::from((*allowed).Header.AceFlags),
+                (*allowed).Mask,
+                std::ptr::addr_of_mut!((*allowed).SidStart).cast(),
+            )
+        };
+        let required_inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+        // ACCESS_ALLOWED_ACE_TYPE is zero in the stable Windows ABI.
+        // SAFETY: `sid` points into the live ACE and `owner` into the live descriptor.
+        let same_owner = unsafe { EqualSid(sid, owner) } != 0;
+        if ace_type != 0
+            || ace_flags & required_inheritance != required_inheritance
+            || mask & FILE_ALL_ACCESS != FILE_ALL_ACCESS
+            || !same_owner
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private directory DACL is not owner-only",
+            ));
+        }
+        Ok(())
+    }
+
+    fn read_owner(
+        handle: windows_sys::Win32::Foundation::HANDLE,
+    ) -> io::Result<(PSID, PSECURITY_DESCRIPTOR)> {
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: output pointers are valid and `handle` remains live for the call.
+        let status = unsafe {
+            GetSecurityInfo(
+                handle,
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(win32_error(status));
+        }
+        if owner.is_null() || descriptor.is_null() {
+            // SAFETY: a non-null descriptor returned by GetSecurityInfo requires LocalFree.
+            unsafe {
+                LocalFree(descriptor.cast());
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "directory has no authenticated owner",
+            ));
+        }
+        Ok((owner, descriptor))
+    }
+
+    fn win32_error(status: u32) -> io::Error {
+        io::Error::from_raw_os_error(i32::try_from(status).unwrap_or(i32::MAX))
+    }
 
     pub(super) fn change_time(file: &FileCapability) -> io::Result<i64> {
         let mut information = FILE_BASIC_INFO::default();
@@ -1239,7 +1525,46 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{Directory, FileIdentity, FileStamp, PhysicalComponent};
+    use super::{
+        Directory, FileIdentity, FileStamp, PhysicalComponent,
+        finish_linked_publication_after_source_remove_failure,
+    };
+
+    #[test]
+    fn no_replace_reports_visibility_when_source_unlink_and_rollback_fail() {
+        let failure = finish_linked_publication_after_source_remove_failure(
+            std::io::Error::other("injected source unlink failure"),
+            Err(std::io::Error::other(
+                "injected destination rollback failure",
+            )),
+            Ok(()),
+        );
+
+        assert!(failure.destination_may_be_visible);
+        assert_eq!(failure.primary.kind(), std::io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn no_replace_reports_visibility_when_rollback_sync_fails() {
+        let failure = finish_linked_publication_after_source_remove_failure(
+            std::io::Error::other("injected source unlink failure"),
+            Ok(()),
+            Err(std::io::Error::other("injected rollback sync failure")),
+        );
+
+        assert!(failure.destination_may_be_visible);
+    }
+
+    #[test]
+    fn no_replace_reports_not_published_only_after_durable_rollback() {
+        let failure = finish_linked_publication_after_source_remove_failure(
+            std::io::Error::other("injected source unlink failure"),
+            Ok(()),
+            Ok(()),
+        );
+
+        assert!(!failure.destination_may_be_visible);
+    }
 
     #[test]
     fn unavailable_change_metadata_is_not_cacheable() {

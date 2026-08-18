@@ -343,6 +343,19 @@ struct FinalSaveSlot {
     state: Arc<OperationState>,
 }
 
+struct ExternalPublicationRegistration<'a> {
+    service: &'a ServiceInner,
+    state: &'a Arc<OperationState>,
+    generation: u64,
+}
+
+impl Drop for ExternalPublicationRegistration<'_> {
+    fn drop(&mut self) {
+        self.service
+            .finish_external_publication(self.state, self.generation);
+    }
+}
+
 struct LockJob {
     generation: u64,
     root: Option<Arc<RootCapabilitySlot>>,
@@ -359,6 +372,7 @@ struct SchedulerState {
     controls: ControlMailbox,
     generation: u64,
     final_save: Option<FinalSaveSlot>,
+    external_publications: HashMap<OperationId, Arc<OperationState>>,
     lock_job: Option<LockJob>,
     session_events: VecDeque<(u64, SessionEvent)>,
     unlock_in_progress: bool,
@@ -387,6 +401,10 @@ impl SchedulerState {
         session_events
             .try_reserve_exact(crate::MAX_WARNING_OFFSETS.saturating_mul(2))
             .map_err(|_| ServiceError::InvalidConfiguration)?;
+        let mut external_publications = HashMap::new();
+        external_publications
+            .try_reserve(active_capacity)
+            .map_err(|_| ServiceError::InvalidConfiguration)?;
         Ok(Self {
             accepting: true,
             key_leases_open: true,
@@ -396,6 +414,7 @@ impl SchedulerState {
             controls: ControlMailbox::new(control_capacity)?,
             generation: 0,
             final_save: None,
+            external_publications,
             lock_job: None,
             session_events,
             unlock_in_progress: false,
@@ -837,6 +856,10 @@ impl ServiceInner {
             if final_save
                 .as_ref()
                 .is_some_and(|final_save| Arc::ptr_eq(final_save, state))
+                || scheduler
+                    .external_publications
+                    .get(&state.id)
+                    .is_some_and(|publication| Arc::ptr_eq(publication, state))
             {
                 continue;
             }
@@ -983,6 +1006,13 @@ impl ServiceInner {
                 if final_save.is_some_and(|final_save| Arc::ptr_eq(final_save, state)) {
                     continue;
                 }
+                if scheduler
+                    .external_publications
+                    .get(&state.id)
+                    .is_some_and(|publication| Arc::ptr_eq(publication, state))
+                {
+                    continue;
+                }
                 state.mark_security_cancelled();
                 if state.mark_lease_cancellation_queued()
                     && sender
@@ -1072,6 +1102,27 @@ impl ServiceInner {
             .as_ref()
             .is_some_and(|session| session.close_root_for_lock(job.root.as_ref()));
         self.cancel_all_transitions();
+        loop {
+            let scheduler = lock(&self.scheduler);
+            let publication_in_flight = scheduler
+                .external_publications
+                .values()
+                .any(|state| state.session_generation == Some(generation));
+            if !publication_in_flight {
+                break;
+            }
+            let _scheduler = self
+                .scheduler_changed
+                .wait(scheduler)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        self.cancel_nonfinal_operations(job.final_save.as_ref());
+        debug_assert!(
+            !lock(&self.scheduler)
+                .external_publications
+                .values()
+                .any(|state| state.session_generation == Some(generation))
+        );
         if let Some(session) = &self.session {
             session.finish_lock_after_close(root_was_present, close_failed);
         }
@@ -1121,6 +1172,9 @@ impl ServiceInner {
         &self,
         state: &Arc<OperationState>,
     ) -> Result<(), ServiceError> {
+        if state.is_durable() {
+            return Ok(());
+        }
         if state.cancelled.load(Ordering::Acquire) {
             return Err(ServiceError::Cancelled);
         }
@@ -1140,6 +1194,60 @@ impl ServiceInner {
             return Err(ServiceError::Cancelled);
         }
         Ok(())
+    }
+
+    pub(crate) fn authorize_external_publication(
+        &self,
+        state: &Arc<OperationState>,
+        publication: &mut dyn FnMut() -> Result<(), crate::HostPortError>,
+    ) -> Result<(), crate::HostPortError> {
+        let generation = {
+            let mut scheduler = lock(&self.scheduler);
+            if scheduler.closed
+                || !scheduler.accepting
+                || !scheduler.key_leases_open
+                || !state.is_running()
+                || state.is_durable()
+                || state.cancelled.load(Ordering::Acquire)
+                || state.session_generation != Some(scheduler.generation)
+                || !scheduler
+                    .active
+                    .get(&state.id)
+                    .is_some_and(|active| Arc::ptr_eq(active, state))
+                || scheduler.external_publications.contains_key(&state.id)
+            {
+                return Err(crate::HostPortError::Cancelled);
+            }
+            let generation = scheduler.generation;
+            scheduler
+                .external_publications
+                .insert(state.id, Arc::clone(state));
+            self.scheduler_changed.notify_all();
+            generation
+        };
+        let _registration = ExternalPublicationRegistration {
+            service: self,
+            state,
+            generation,
+        };
+        let result = publication();
+        if result.is_ok() {
+            state.mark_irrevocable();
+        }
+        result
+    }
+
+    fn finish_external_publication(&self, state: &Arc<OperationState>, generation: u64) {
+        let mut scheduler = lock(&self.scheduler);
+        let exact = state.session_generation == Some(generation)
+            && scheduler
+                .external_publications
+                .get(&state.id)
+                .is_some_and(|registered| Arc::ptr_eq(registered, state));
+        if exact {
+            scheduler.external_publications.remove(&state.id);
+            self.scheduler_changed.notify_all();
+        }
     }
 
     pub(crate) fn acquire_replication_lease(
@@ -3081,6 +3189,71 @@ fn worker_loop(inner: Arc<ServiceInner>, receiver: Receiver<WorkItem>) {
                         }
                         Command::Status(_) if inner.session.is_some() => {
                             crate::local_use_cases::status(&inner, &item.state, &context)
+                        }
+                        Command::CreateFile(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::create_file(
+                                &inner,
+                                &item.state,
+                                &context,
+                                request,
+                            )
+                        }
+                        Command::CreateDirectory(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::create_directory(
+                                &inner,
+                                &item.state,
+                                &context,
+                                request,
+                            )
+                        }
+                        Command::ImportFile(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::import_file(
+                                &inner,
+                                &item.state,
+                                &context,
+                                request,
+                            )
+                        }
+                        Command::ExportFile(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::export_file(
+                                &inner,
+                                &item.state,
+                                &context,
+                                request,
+                            )
+                        }
+                        Command::RenameEntry(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::rename(&inner, &item.state, &context, request)
+                        }
+                        Command::MoveEntry(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::move_entry(
+                                &inner,
+                                &item.state,
+                                &context,
+                                request,
+                            )
+                        }
+                        Command::DeleteEntry(request)
+                            if inner.session.is_some() && request.is_configured() =>
+                        {
+                            crate::local_use_cases::delete_entry(
+                                &inner,
+                                &item.state,
+                                &context,
+                                request,
+                            )
                         }
                         command => inner.executor.execute(command, &context),
                     })) {

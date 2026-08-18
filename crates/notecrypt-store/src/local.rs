@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use notecrypt_core::{FileId, ObjectId, RevisionId, SnapshotId, VaultId};
+use notecrypt_core::{CoreError, EntryName, FileId, ObjectId, RevisionId, SnapshotId, VaultId};
 use notecrypt_crypto::{
     AeadEnvelopeParts, Argon2idParameters, OsRandom, PublicEnvelopeIdentity,
     RECOVERY_SLOT_OBJECT_KIND, RecoveryPassphrase, RecoverySlotContext, RecoverySlotEnvelope,
@@ -153,6 +153,11 @@ impl Drop for VaultRepair {
 pub struct RepositoryEntryId([u8; 16]);
 
 impl RepositoryEntryId {
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
@@ -470,6 +475,7 @@ pub struct RepositoryMutationResult {
 pub struct StreamRevisionRequest {
     expected_snapshot: SnapshotId,
     file_id: Option<FileId>,
+    parent: Option<RepositoryEntryId>,
     expected_revision: Option<RevisionId>,
     name: String,
 }
@@ -485,6 +491,31 @@ impl StreamRevisionRequest {
         Self {
             expected_snapshot,
             file_id: None,
+            parent: None,
+            expected_revision: None,
+            name,
+        }
+    }
+
+    #[must_use]
+    pub fn create_in_parent(
+        expected_snapshot: SnapshotId,
+        parent: RepositoryEntryId,
+        name: &str,
+    ) -> Self {
+        Self::create_in_parent_owned(expected_snapshot, parent, name.to_owned())
+    }
+
+    #[must_use]
+    pub fn create_in_parent_owned(
+        expected_snapshot: SnapshotId,
+        parent: RepositoryEntryId,
+        name: String,
+    ) -> Self {
+        Self {
+            expected_snapshot,
+            file_id: None,
+            parent: Some(parent),
             expected_revision: None,
             name,
         }
@@ -515,6 +546,7 @@ impl StreamRevisionRequest {
         Self {
             expected_snapshot,
             file_id: Some(file_id),
+            parent: None,
             expected_revision: Some(expected_revision),
             name,
         }
@@ -1268,6 +1300,43 @@ impl UnlockedVaultLease {
         })
     }
 
+    pub fn validate_entry_binding(
+        &mut self,
+        entry: RepositoryEntryId,
+        parent: RepositoryEntryId,
+        name: &str,
+        kind: RepositoryEntryKind,
+        revision: Option<RevisionId>,
+        cancel: &AtomicBool,
+    ) -> Result<(), StoreError> {
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        let (_, tree) = self.current_tree_with_cancel(cancel)?;
+        for candidate in tree.entries() {
+            check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+            if entry_matches_binding(candidate, entry, parent, name, kind, revision) {
+                return Ok(());
+            }
+        }
+        Err(StoreError::InvalidCapability)
+    }
+
+    pub fn validate_export_binding(
+        &mut self,
+        entry: RepositoryEntryId,
+        revision: RevisionId,
+        cancel: &AtomicBool,
+    ) -> Result<(), StoreError> {
+        check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+        let (_, tree) = self.current_tree_with_cancel(cancel)?;
+        for candidate in tree.entries() {
+            check_boundary(self.keys.as_ref(), self.generation, cancel)?;
+            if entry_matches_export(candidate, entry, revision) {
+                return Ok(());
+            }
+        }
+        Err(StoreError::InvalidCapability)
+    }
+
     pub fn authenticated_status(
         &mut self,
         max_entries: usize,
@@ -1533,6 +1602,7 @@ impl UnlockedVaultLease {
     ) -> Result<RepositorySnapshot, StoreError> {
         self.commit_streamed_revision_with_random(
             file_id,
+            None,
             name,
             None,
             None,
@@ -1554,6 +1624,7 @@ impl UnlockedVaultLease {
     ) -> Result<RepositorySnapshot, StoreError> {
         self.commit_streamed_revision_with_random(
             request.file_id,
+            request.parent,
             &request.name,
             Some(request.expected_snapshot),
             request.expected_revision,
@@ -1569,6 +1640,7 @@ impl UnlockedVaultLease {
     fn commit_streamed_revision_with_random(
         &mut self,
         file_id: Option<FileId>,
+        requested_parent: Option<RepositoryEntryId>,
         name: &str,
         expected_snapshot: Option<SnapshotId>,
         expected_revision: Option<RevisionId>,
@@ -1596,6 +1668,9 @@ impl UnlockedVaultLease {
         }
         let root = *tree.root();
         let mut entries = tree.into_parts().1;
+        if file_id.is_some() && requested_parent.is_some() {
+            return Err(StoreError::InvalidCapability);
+        }
         let file = file_id.unwrap_or(generate_file_id(random)?);
         let existing_index = entries
             .iter()
@@ -1612,13 +1687,10 @@ impl UnlockedVaultLease {
         } else if expected_snapshot.is_some() && file_id.is_some() {
             return Err(StoreError::InvalidCapability);
         }
-        if existing_index.is_none()
-            && entries.iter().any(|entry| match entry {
-                TreeEntry::File { name: existing, .. } => existing == name,
-                _ => false,
-            })
-        {
-            return Err(StoreError::InvalidCapability);
+        if existing_index.is_none() {
+            let parent = requested_parent.unwrap_or(RepositoryEntryId(root));
+            require_directory(&entries, root, parent)?;
+            require_name_available(&entries, parent, name, None)?;
         }
 
         let previous = if let Some(index) = existing_index {
@@ -1779,7 +1851,9 @@ impl UnlockedVaultLease {
                 TreeEntry::File { parent, .. } => *parent,
                 _ => return Err(StoreError::InvalidCapability),
             },
-            None => root,
+            None => *requested_parent
+                .unwrap_or(RepositoryEntryId(root))
+                .as_bytes(),
         };
         let replacement = TreeEntry::file(
             *file.as_bytes(),
@@ -2220,29 +2294,47 @@ fn require_name_available(
     name: &str,
     except: Option<RepositoryEntryId>,
 ) -> Result<(), StoreError> {
-    if entries.iter().any(|entry| {
+    let maximum = usize::from(DecodeLimits::PHASE_1.max_name_bytes);
+    let requested = EntryName::try_parse_bounded(name, maximum)
+        .map_err(map_entry_name_error)?
+        .try_collision_key(maximum)
+        .map_err(map_entry_name_error)?;
+    for entry in entries {
         if except
             .as_ref()
             .is_some_and(|id| id.as_bytes() == entry.id())
         {
-            return false;
+            continue;
         }
-        matches!(
-            entry,
+        let candidate = match entry {
             TreeEntry::File {
                 parent: candidate_parent,
                 name: candidate_name,
                 ..
-            } | TreeEntry::Directory {
+            }
+            | TreeEntry::Directory {
                 parent: candidate_parent,
                 name: candidate_name,
                 ..
-            } if candidate_parent == parent.as_bytes() && candidate_name == name
-        )
-    }) {
-        Err(StoreError::InvalidCapability)
-    } else {
-        Ok(())
+            } if candidate_parent == parent.as_bytes() => candidate_name,
+            _ => continue,
+        };
+        let collision = EntryName::try_parse_bounded(candidate, maximum)
+            .map_err(map_entry_name_error)?
+            .try_collision_key(maximum)
+            .map_err(map_entry_name_error)?;
+        if collision == requested {
+            return Err(StoreError::InvalidCapability);
+        }
+    }
+    Ok(())
+}
+
+fn map_entry_name_error(error: CoreError) -> StoreError {
+    match error {
+        CoreError::AllocationFailed => StoreError::AllocationFailed,
+        CoreError::CapacityExceeded => StoreError::LimitExceeded,
+        _ => StoreError::InvalidInput,
     }
 }
 
@@ -3267,6 +3359,106 @@ mod activation_tests {
     }
 }
 
+fn entry_matches_binding(
+    candidate: &TreeEntry,
+    entry: RepositoryEntryId,
+    parent: RepositoryEntryId,
+    name: &str,
+    kind: RepositoryEntryKind,
+    revision: Option<RevisionId>,
+) -> bool {
+    match candidate {
+        TreeEntry::Root { .. } => false,
+        TreeEntry::File {
+            id,
+            parent: candidate_parent,
+            name: candidate_name,
+            locator,
+        } => {
+            kind == RepositoryEntryKind::File
+                && *id == entry.0
+                && *candidate_parent == parent.0
+                && candidate_name == name
+                && revision == Some(RevisionId::from_bytes(*locator.revision_id()))
+        }
+        TreeEntry::Directory {
+            id,
+            parent: candidate_parent,
+            name: candidate_name,
+        } => {
+            kind == RepositoryEntryKind::Directory
+                && *id == entry.0
+                && *candidate_parent == parent.0
+                && candidate_name == name
+                && revision.is_none()
+        }
+        TreeEntry::Tombstone {
+            id,
+            parent: candidate_parent,
+            name: candidate_name,
+            last_revision,
+            ..
+        } => {
+            kind == RepositoryEntryKind::Tombstone
+                && *id == entry.0
+                && *candidate_parent == parent.0
+                && candidate_name == name
+                && revision
+                    == last_revision
+                        .as_ref()
+                        .map(|locator| RevisionId::from_bytes(*locator.revision_id()))
+        }
+    }
+}
+
+fn entry_matches_export(
+    candidate: &TreeEntry,
+    entry: RepositoryEntryId,
+    revision: RevisionId,
+) -> bool {
+    matches!(
+        candidate,
+        TreeEntry::File { id, locator, .. }
+            if *id == entry.0 && locator.revision_id() == revision.as_bytes()
+    )
+}
+
+#[cfg(test)]
+mod binding_scale_tests {
+    use notecrypt_format::{DecodeLimits, TreeEntry};
+
+    use super::{RepositoryEntryId, RepositoryEntryKind, entry_matches_binding};
+
+    #[test]
+    fn targeted_binding_scales_to_one_hundred_thousand_entries_without_result_materialization() {
+        const COUNT: usize = 100_000;
+        let root = [0x41; 16];
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(COUNT).unwrap();
+        for index in 0..COUNT {
+            entries.push(
+                TreeEntry::directory(
+                    (index as u128).to_be_bytes(),
+                    root,
+                    "bounded",
+                    &DecodeLimits::PHASE_1,
+                )
+                .unwrap(),
+            );
+        }
+        let target = RepositoryEntryId::from_bytes(((COUNT - 1) as u128).to_be_bytes());
+
+        assert!(entries.iter().any(|candidate| entry_matches_binding(
+            candidate,
+            target,
+            RepositoryEntryId::from_bytes(root),
+            "bounded",
+            RepositoryEntryKind::Directory,
+            None,
+        )));
+    }
+}
+
 #[cfg(feature = "test-support")]
 pub mod test_support {
     use std::cell::RefCell;
@@ -3621,6 +3813,7 @@ pub mod test_support {
         };
         lease.commit_streamed_revision_with_random(
             None,
+            None,
             name,
             None,
             None,
@@ -3641,6 +3834,7 @@ pub mod test_support {
         maximum_chunks: u32,
     ) -> Result<RepositorySnapshot, StoreError> {
         lease.commit_streamed_revision_with_random(
+            None,
             None,
             name,
             None,

@@ -101,6 +101,7 @@ pub(crate) struct OperationState {
     pub(crate) id: OperationId,
     lifecycle: AtomicU8,
     pub(crate) cancelled: AtomicBool,
+    durable: AtomicBool,
     pub(crate) cancel_notification_pending: AtomicBool,
     pub(crate) cancel_notification_acknowledged: AtomicBool,
     events: Mutex<EventBuffer>,
@@ -142,6 +143,7 @@ impl OperationState {
             id,
             lifecycle: AtomicU8::new(ACCEPTED),
             cancelled: AtomicBool::new(false),
+            durable: AtomicBool::new(false),
             cancel_notification_pending: AtomicBool::new(false),
             cancel_notification_acknowledged: AtomicBool::new(false),
             events: Mutex::new(EventBuffer::new(event_capacity)?),
@@ -240,6 +242,38 @@ impl OperationState {
 
     pub(crate) fn request_cancel(&self) {
         self.mark_cancelled();
+    }
+
+    pub(crate) fn is_durable(&self) -> bool {
+        self.durable.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_irrevocable(&self) {
+        self.durable.store(true, Ordering::Release);
+    }
+
+    fn publish_durable(&self, durable: DurabilitySummary) -> Result<(), ServiceError> {
+        self.durable.store(true, Ordering::Release);
+        let mut events = lock(&self.events);
+        if events.consumer_gone {
+            return Ok(());
+        }
+        while events.lossless.len() == events.lossless_capacity
+            && !events.consumer_gone
+            && !self.is_terminal()
+        {
+            events = wait(&self.event_changed, events);
+        }
+        if events.consumer_gone {
+            return Ok(());
+        }
+        if self.is_terminal() {
+            return Err(ServiceError::Closed);
+        }
+        let sequenced = events.sequence(OperationEvent::RevisionDurable(durable))?;
+        events.lossless.push_back(sequenced);
+        self.event_changed.notify_all();
+        Ok(())
     }
 
     pub(crate) fn repository_cancellation(&self) -> Arc<crate::RepositoryCancellation> {
@@ -495,6 +529,17 @@ impl OperationContext {
         self.state
             .publish(OperationEvent::RevisionDurable(durable))?;
         self.safe_boundary()
+    }
+
+    /// Records a store-confirmed durable commit point.
+    ///
+    /// Cancellation observed after this point cannot turn an already committed
+    /// mutation into a caller-visible cancellation.
+    pub(crate) fn revision_durable_committed(
+        &self,
+        durable: DurabilitySummary,
+    ) -> Result<(), ServiceError> {
+        self.state.publish_durable(durable)
     }
 
     pub fn save_detected(&self) -> Result<(), ServiceError> {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,6 +10,8 @@ use notecrypt_core::{LogicalPath, VaultId};
 use notecrypt_crypto::{DeviceWrappingKey, RecoveryPassphrase};
 use notecrypt_store::CleanupWorkspaceId;
 use zeroize::{Zeroize, Zeroizing};
+
+use crate::VaultPublicationGuard;
 
 /// Maximum opaque stable-source evidence retained by the service.
 pub const MAX_STABLE_SOURCE_TOKEN_BYTES: usize = 256;
@@ -41,15 +43,178 @@ pub const MAX_RECOVERY_SECRET_BYTES: usize = 1_024;
 /// Maximum native path bytes retained by any service-owned host DTO.
 pub const MAX_NATIVE_PATH_BYTES: usize = 32 * 1_024;
 
+/// Private bounded caller selection for one explicit import source.
+pub struct ImportSelection {
+    path: PathBuf,
+}
+
+/// Explicit overwrite authorization carried by one export selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportOverwriteConfirmation {
+    Refuse,
+    Confirmed,
+}
+
+/// Private bounded caller selection for one explicit export destination.
+pub struct ExportSelection {
+    path: PathBuf,
+    overwrite: ExportOverwriteConfirmation,
+}
+
+impl ExportSelection {
+    pub fn try_new(
+        path: PathBuf,
+        overwrite: ExportOverwriteConfirmation,
+    ) -> Result<Self, crate::ServiceError> {
+        if encoded_len(path.as_os_str()) > MAX_NATIVE_PATH_BYTES {
+            return Err(crate::ServiceError::CapacityExceeded);
+        }
+        if !valid_absolute_path(&path) {
+            return Err(crate::ServiceError::InvalidInput);
+        }
+        let path = try_rehome_path(path, MAX_NATIVE_PATH_BYTES).map_err(|error| match error {
+            HostPortError::CapacityExceeded => crate::ServiceError::CapacityExceeded,
+            HostPortError::AllocationFailed => crate::ServiceError::AllocationFailed,
+            _ => crate::ServiceError::InvalidInput,
+        })?;
+        Ok(Self { path, overwrite })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub const fn overwrite(&self) -> ExportOverwriteConfirmation {
+        self.overwrite
+    }
+}
+
+impl std::fmt::Debug for ExportSelection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ExportSelection(<redacted>)")
+    }
+}
+
+impl ImportSelection {
+    pub fn try_new(path: PathBuf) -> Result<Self, crate::ServiceError> {
+        if encoded_len(path.as_os_str()) > MAX_NATIVE_PATH_BYTES {
+            return Err(crate::ServiceError::CapacityExceeded);
+        }
+        if !valid_absolute_path(&path) {
+            return Err(crate::ServiceError::InvalidInput);
+        }
+        let path = try_rehome_path(path, MAX_NATIVE_PATH_BYTES).map_err(|error| match error {
+            HostPortError::CapacityExceeded => crate::ServiceError::CapacityExceeded,
+            HostPortError::AllocationFailed => crate::ServiceError::AllocationFailed,
+            _ => crate::ServiceError::InvalidInput,
+        })?;
+        Ok(Self { path })
+    }
+
+    /// Borrows the validated path only for the trusted external-file adapter.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl std::fmt::Debug for ImportSelection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ImportSelection(<redacted>)")
+    }
+}
+
+/// One already-opened import source plus its exact publication-time stability proof.
+pub struct OpenedImport {
+    reader: Box<dyn Read + Send + 'static>,
+    guard: Box<dyn VaultPublicationGuard>,
+}
+
+/// Generation-bound authorization held across caller-visible publication.
+pub trait ExternalPublicationAuthorization {
+    fn authorize_and_publish(
+        &mut self,
+        publication: &mut dyn FnMut() -> Result<(), HostPortError>,
+    ) -> Result<(), HostPortError>;
+}
+
+/// Linear private export transaction supplied by a trusted host adapter.
+pub trait ExternalExportTransaction: Write + Send {
+    fn flush_private(&mut self) -> Result<(), HostPortError>;
+    fn publish(
+        self: Box<Self>,
+        authorization: &mut dyn ExternalPublicationAuthorization,
+    ) -> Result<(), HostPortError>;
+    fn abort(self: Box<Self>) -> Result<(), HostPortError>;
+}
+
+/// One opened private export staging capability.
+pub struct OpenedExport {
+    transaction: Box<dyn ExternalExportTransaction>,
+}
+
+impl OpenedExport {
+    pub fn new(transaction: Box<dyn ExternalExportTransaction>) -> Self {
+        Self { transaction }
+    }
+
+    pub(crate) fn into_transaction(self) -> Box<dyn ExternalExportTransaction> {
+        self.transaction
+    }
+}
+
+impl OpenedImport {
+    pub fn new(
+        reader: Box<dyn Read + Send + 'static>,
+        guard: Box<dyn VaultPublicationGuard>,
+    ) -> Self {
+        Self { reader, guard }
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Box<dyn Read + Send + 'static>,
+        Box<dyn VaultPublicationGuard>,
+    ) {
+        (self.reader, self.guard)
+    }
+}
+
+/// Host boundary that opens only an explicit user-selected import source.
+pub trait ExternalFileProvider: Send + Sync + 'static {
+    fn open_import(&self, selection: ImportSelection) -> Result<OpenedImport, HostPortError>;
+
+    fn begin_export(&self, _selection: ExportSelection) -> Result<OpenedExport, HostPortError> {
+        Err(HostPortError::Unavailable)
+    }
+
+    /// Retries cleanup of exact provider-owned external export staging.
+    fn retry_cleanup(&self) -> Result<(), HostPortError> {
+        Ok(())
+    }
+}
+
+pub(crate) struct UnavailableExternalFiles;
+
+impl ExternalFileProvider for UnavailableExternalFiles {
+    fn open_import(&self, _selection: ImportSelection) -> Result<OpenedImport, HostPortError> {
+        Err(HostPortError::Unavailable)
+    }
+}
+
 /// Stable bounded host-boundary failures without raw platform details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HostPortError {
+    Cancelled,
     Unavailable,
     Denied,
     InvalidInput,
     CapacityExceeded,
     AllocationFailed,
+    DestinationExists,
+    StaleCapability,
+    DurabilityPending,
     DetachedEditor,
     Permission,
     LiveWorkspace,

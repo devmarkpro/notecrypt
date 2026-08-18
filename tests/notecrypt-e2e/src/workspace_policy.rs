@@ -235,6 +235,7 @@ fn allowed_internal_dependencies(package: &str) -> BTreeSet<&'static str> {
                 "notecrypt-store",
                 "notecrypt-replication",
                 "notecrypt-crypto",
+                "notecrypt-platform-fs",
             ][..],
         ),
         ("notecrypt-backend-git", &["notecrypt-backend"][..]),
@@ -297,7 +298,7 @@ fn platform_fs_is_the_only_narrow_unsafe_island() {
     let island_source = fs::read_to_string(island.join("src/lib.rs")).expect("read island source");
     assert_eq!(island_source.matches("#[allow(unsafe_code)]").count(), 1);
     let unsafe_blocks = island_source.matches("unsafe {").count();
-    assert_eq!(unsafe_blocks, 10);
+    assert_eq!(unsafe_blocks, 21);
     assert_eq!(island_source.matches("SAFETY:").count(), unsafe_blocks);
     assert!(!island_source.contains("unsafe fn"));
     assert!(!island_source.contains("unsafe impl"));

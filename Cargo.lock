@@ -801,6 +801,11 @@ dependencies = [
 name = "notecrypt-e2e"
 version = "0.1.0"
 dependencies = [
+ "notecrypt-crypto",
+ "notecrypt-format",
+ "notecrypt-service",
+ "notecrypt-store",
+ "tempfile",
  "toml",
 ]
 
@@ -855,6 +860,7 @@ dependencies = [
  "getrandom 0.3.4",
  "notecrypt-core",
  "notecrypt-crypto",
+ "notecrypt-platform-fs",
  "notecrypt-replication",
  "notecrypt-store",
  "serde",

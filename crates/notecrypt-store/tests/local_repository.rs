@@ -276,6 +276,125 @@ fn directory_rename_and_tombstone_mutations_are_transactional_end_to_end() {
     ));
 }
 
+#[test]
+fn streamed_create_binds_parent_and_checks_only_live_siblings() {
+    let repository = TempDir::new().unwrap();
+    let local = TempDir::new().unwrap();
+    let cancel = AtomicBool::new(false);
+    let store = VaultStore::initialize(
+        &repository.path().canonicalize().unwrap(),
+        &local.path().canonicalize().unwrap(),
+        passphrase(),
+        parameters(),
+        "test-device",
+        &cancel,
+    )
+    .unwrap();
+    let unlocked = store.unlock_recovery(passphrase(), &cancel).unwrap();
+    let mut lease = unlocked.acquire_lease().unwrap();
+    let base = lease.current_snapshot_id().unwrap();
+    let root = lease.root_entry_id().unwrap();
+    let left = lease
+        .apply(
+            RepositoryMutation::create_directory(base, root, "left"),
+            &mut AllowPublication,
+            &cancel,
+        )
+        .unwrap();
+    let right = lease
+        .apply(
+            RepositoryMutation::create_directory(left.snapshot_id(), root, "right"),
+            &mut AllowPublication,
+            &cancel,
+        )
+        .unwrap();
+
+    let nested = lease
+        .commit_streamed_revision(
+            StreamRevisionRequest::create_in_parent(
+                right.snapshot_id(),
+                left.entry_id(),
+                "same.bin",
+            ),
+            &mut Cursor::new(b"left"),
+            &mut AllowPublication,
+            &cancel,
+        )
+        .unwrap();
+    let sibling_name_elsewhere = lease
+        .commit_streamed_revision(
+            StreamRevisionRequest::create_in_parent(
+                nested.snapshot_id(),
+                right.entry_id(),
+                "same.bin",
+            ),
+            &mut Cursor::new(b"right"),
+            &mut AllowPublication,
+            &cancel,
+        )
+        .unwrap();
+
+    let entries = lease.list_entries().unwrap();
+    assert!(entries.iter().any(|entry| {
+        entry.id().as_bytes() == nested.file_id().as_bytes()
+            && entry.parent_id() == left.entry_id()
+            && entry.name() == "same.bin"
+    }));
+    assert!(entries.iter().any(|entry| {
+        entry.id().as_bytes() == sibling_name_elsewhere.file_id().as_bytes()
+            && entry.parent_id() == right.entry_id()
+            && entry.name() == "same.bin"
+    }));
+
+    let unicode = lease
+        .commit_streamed_revision(
+            StreamRevisionRequest::create_in_parent(
+                sibling_name_elsewhere.snapshot_id(),
+                left.entry_id(),
+                "café.txt",
+            ),
+            &mut Cursor::new(b"unicode"),
+            &mut AllowPublication,
+            &cancel,
+        )
+        .unwrap();
+    let before_rejection = unicode.snapshot_id();
+    assert!(matches!(
+        lease.commit_streamed_revision(
+            StreamRevisionRequest::create_in_parent(before_rejection, left.entry_id(), "same.bin"),
+            &mut Cursor::new(b"conflict"),
+            &mut AllowPublication,
+            &cancel,
+        ),
+        Err(StoreError::InvalidCapability)
+    ));
+    assert_eq!(lease.current_snapshot_id().unwrap(), before_rejection);
+    assert!(matches!(
+        lease.commit_streamed_revision(
+            StreamRevisionRequest::create_in_parent(before_rejection, left.entry_id(), "SAME.BIN",),
+            &mut Cursor::new(b"case collision"),
+            &mut AllowPublication,
+            &cancel,
+        ),
+        Err(StoreError::InvalidCapability)
+    ));
+    assert_eq!(lease.current_snapshot_id().unwrap(), before_rejection);
+    assert!(matches!(
+        lease.commit_streamed_revision(
+            StreamRevisionRequest::create_in_parent(
+                before_rejection,
+                left.entry_id(),
+                "CAFE\u{301}.TXT",
+            ),
+            &mut Cursor::new(b"normalization collision"),
+            &mut AllowPublication,
+            &cancel,
+        ),
+        Err(StoreError::InvalidCapability)
+    ));
+    assert_eq!(lease.current_snapshot_id().unwrap(), before_rejection);
+}
+
 fn parameters() -> ValidatedArgon2idParameters {
     ValidatedArgon2idParameters::try_from(Argon2idParameters {
         memory_kib: 65_536,

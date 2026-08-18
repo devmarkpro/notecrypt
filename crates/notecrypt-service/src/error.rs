@@ -47,6 +47,10 @@ pub enum ServiceError {
     ClockFailure,
     /// A linear capability was stale, mismatched, or already consumed.
     StaleCapability,
+    /// An export destination exists without explicit overwrite confirmation.
+    DestinationExists,
+    /// A caller-visible filesystem transition may still require durability reconciliation.
+    DurabilityPending,
 }
 
 impl fmt::Display for ServiceError {
@@ -73,6 +77,10 @@ impl fmt::Display for ServiceError {
             Self::CleanupRequired => "workspace cleanup is required",
             Self::ClockFailure => "the monotonic session clock failed",
             Self::StaleCapability => "the capability is stale or mismatched",
+            Self::DestinationExists => "the export destination already exists",
+            Self::DurabilityPending => {
+                "the filesystem transition requires durability reconciliation"
+            }
         })
     }
 }

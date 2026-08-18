@@ -51,7 +51,7 @@ impl FaultClock {
 
 struct BlockingClock {
     now: AtomicU64,
-    armed: std::sync::atomic::AtomicBool,
+    armed_thread: Mutex<Option<thread::ThreadId>>,
     entered: Mutex<Option<mpsc::Sender<()>>>,
     gate: Arc<TestGate>,
 }
@@ -60,20 +60,30 @@ impl BlockingClock {
     fn new(entered: mpsc::Sender<()>, gate: Arc<TestGate>) -> Self {
         Self {
             now: AtomicU64::new(0),
-            armed: std::sync::atomic::AtomicBool::new(false),
+            armed_thread: Mutex::new(None),
             entered: Mutex::new(Some(entered)),
             gate,
         }
     }
 
-    fn arm(&self) {
-        self.armed.store(true, Ordering::Release);
+    fn arm_current_thread(&self) {
+        *self.armed_thread.lock().unwrap() = Some(thread::current().id());
     }
 }
 
 impl MonotonicClock for BlockingClock {
     fn elapsed(&self) -> Result<Duration, ServiceError> {
-        if self.armed.swap(false, Ordering::AcqRel) {
+        let current = thread::current().id();
+        let should_block = {
+            let mut armed_thread = self.armed_thread.lock().unwrap();
+            if armed_thread.as_ref() == Some(&current) {
+                armed_thread.take();
+                true
+            } else {
+                false
+            }
+        };
+        if should_block {
             let entered = self.entered.lock().unwrap().take();
             if let Some(entered) = entered {
                 entered.send(()).unwrap();
@@ -280,6 +290,25 @@ impl LocalVaultLease for FakeLocalLease {
         if self.repository_cancellation.is_cancelled() {
             return Err(RepositoryPortError::Cancelled);
         }
+        Err(RepositoryPortError::Unavailable)
+    }
+
+    fn validate_entry_binding(
+        &mut self,
+        _entry: notecrypt_service::LocalEntryId,
+        _parent: notecrypt_service::LocalEntryId,
+        _name: &str,
+        _kind: notecrypt_service::LocalEntryKind,
+        _revision: Option<notecrypt_core::RevisionId>,
+    ) -> Result<(), RepositoryPortError> {
+        Err(RepositoryPortError::Unavailable)
+    }
+
+    fn validate_export_binding(
+        &mut self,
+        _entry: notecrypt_service::LocalEntryId,
+        _revision: notecrypt_core::RevisionId,
+    ) -> Result<(), RepositoryPortError> {
         Err(RepositoryPortError::Unavailable)
     }
 
@@ -1645,8 +1674,11 @@ fn blocked_clock_and_cancellation_callback_cannot_delay_post_grace_revocation() 
         .unwrap();
     executor_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
 
-    clock.arm();
-    let activity_worker = thread::spawn(move || activity.record());
+    let activity_clock = Arc::clone(&clock);
+    let activity_worker = thread::spawn(move || {
+        activity_clock.arm_current_thread();
+        activity.record()
+    });
     clock_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
     service.control(Control::LockNow).unwrap();
     cancellation_entered_rx.recv_timeout(SHORT_WAIT).unwrap();

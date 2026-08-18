@@ -172,6 +172,7 @@ pub enum RepositoryPortError {
     EntropyUnavailable,
     IdentifierExhausted,
     InvalidInput,
+    StaleCapability,
 }
 
 /// Service-owned bounds for one replication operation.
@@ -598,6 +599,21 @@ impl LocalMutationResult {
 pub struct LocalStreamRevisionRequest(notecrypt_store::StreamRevisionRequest);
 
 impl LocalStreamRevisionRequest {
+    pub fn try_create_in_parent(
+        expected_snapshot: SnapshotId,
+        parent: LocalEntryId,
+        name: &str,
+    ) -> Result<Self, RepositoryPortError> {
+        let name = validated_entry_name(name)?;
+        Ok(Self(
+            notecrypt_store::StreamRevisionRequest::create_in_parent_owned(
+                expected_snapshot,
+                parent.0,
+                name,
+            ),
+        ))
+    }
+
     pub fn try_create(
         expected_snapshot: SnapshotId,
         name: &str,
@@ -673,6 +689,14 @@ impl<'a> StableRevisionCommit<'a> {
     }
 }
 
+pub(crate) fn selected_revision_commit<'a>(
+    request: LocalStreamRevisionRequest,
+    source: &'a mut dyn Read,
+    guard: &'a mut dyn VaultPublicationGuard,
+) -> StableRevisionCommit<'a> {
+    StableRevisionCommit::new(request, source, guard)
+}
+
 /// Bounded local operation lease backed by the exact Task 6 lease.
 pub trait LocalVaultLease: Send {
     fn cancellation_handle(&self) -> Arc<dyn OperationCancellation>;
@@ -730,6 +754,19 @@ pub trait LocalVaultLease: Send {
             entry_count: entries.len(),
         })
     }
+    fn validate_entry_binding(
+        &mut self,
+        entry: LocalEntryId,
+        parent: LocalEntryId,
+        name: &str,
+        kind: LocalEntryKind,
+        revision: Option<RevisionId>,
+    ) -> Result<(), RepositoryPortError>;
+    fn validate_export_binding(
+        &mut self,
+        entry: LocalEntryId,
+        revision: RevisionId,
+    ) -> Result<(), RepositoryPortError>;
     fn apply(
         &mut self,
         mutation: LocalMutation,
@@ -1906,6 +1943,49 @@ impl LocalVaultLease for StoreLocalVaultLease {
         })
     }
 
+    fn validate_entry_binding(
+        &mut self,
+        entry: LocalEntryId,
+        parent: LocalEntryId,
+        name: &str,
+        kind: LocalEntryKind,
+        revision: Option<RevisionId>,
+    ) -> Result<(), RepositoryPortError> {
+        let kind = match kind {
+            LocalEntryKind::File => notecrypt_store::RepositoryEntryKind::File,
+            LocalEntryKind::Directory => notecrypt_store::RepositoryEntryKind::Directory,
+            LocalEntryKind::Tombstone => notecrypt_store::RepositoryEntryKind::Tombstone,
+        };
+        self.lease
+            .as_mut()
+            .ok_or(RepositoryPortError::Locked)?
+            .validate_entry_binding(
+                notecrypt_store::RepositoryEntryId::from_bytes(*entry.as_bytes()),
+                notecrypt_store::RepositoryEntryId::from_bytes(*parent.as_bytes()),
+                name,
+                kind,
+                revision,
+                &self.cancel,
+            )
+            .map_err(map_store_error)
+    }
+
+    fn validate_export_binding(
+        &mut self,
+        entry: LocalEntryId,
+        revision: RevisionId,
+    ) -> Result<(), RepositoryPortError> {
+        self.lease
+            .as_mut()
+            .ok_or(RepositoryPortError::Locked)?
+            .validate_export_binding(
+                notecrypt_store::RepositoryEntryId::from_bytes(*entry.as_bytes()),
+                revision,
+                &self.cancel,
+            )
+            .map_err(map_store_error)
+    }
+
     fn apply(
         &mut self,
         mutation: LocalMutation,
@@ -2500,10 +2580,11 @@ fn map_store_error(error: StoreError) -> RepositoryPortError {
     match error {
         StoreError::AuthenticationFailed
         | StoreError::LocalStateAuthenticationFailed
-        | StoreError::RollbackDetected
         | StoreError::MalformedObject => RepositoryPortError::IntegrityFailed,
+        StoreError::RollbackDetected => RepositoryPortError::StaleCapability,
         StoreError::Cancelled => RepositoryPortError::Cancelled,
-        StoreError::Locked | StoreError::InvalidCapability => RepositoryPortError::Locked,
+        StoreError::Locked => RepositoryPortError::Locked,
+        StoreError::InvalidCapability => RepositoryPortError::StaleCapability,
         StoreError::Busy => RepositoryPortError::Busy,
         StoreError::LimitExceeded => RepositoryPortError::CapacityExceeded,
         StoreError::AllocationFailed => RepositoryPortError::AllocationFailed,
@@ -2531,6 +2612,9 @@ fn map_repository_publication_error(error: RepositoryPortError) -> StoreError {
         RepositoryPortError::Locked => StoreError::Locked,
         RepositoryPortError::Busy => StoreError::Busy,
         RepositoryPortError::TimedOut => StoreError::TimedOut,
+        RepositoryPortError::PlatformFailure => {
+            StoreError::Io(std::io::Error::other("external publication guard failed"))
+        }
         _ => StoreError::InvalidCapability,
     }
 }
@@ -2572,6 +2656,7 @@ fn map_unlock_error(error: StoreError) -> RepositoryPortError {
 pub struct SessionComponents {
     pub(crate) repository: Arc<dyn VaultRepository>,
     pub(crate) workspace: Arc<dyn WorkspaceProvider>,
+    pub(crate) external_files: Arc<dyn crate::ExternalFileProvider>,
     pub(crate) clock: Arc<dyn MonotonicClock>,
     pub(crate) policy: SessionPolicy,
 }
@@ -2773,9 +2858,20 @@ impl SessionComponents {
         Self {
             repository,
             workspace,
+            external_files: Arc::new(crate::ports::UnavailableExternalFiles),
             clock,
             policy,
         }
+    }
+
+    /// Installs the trusted adapter that opens explicit user-selected files.
+    #[must_use]
+    pub fn with_external_files(
+        mut self,
+        external_files: Arc<dyn crate::ExternalFileProvider>,
+    ) -> Self {
+        self.external_files = external_files;
+        self
     }
 }
 
@@ -2805,6 +2901,7 @@ pub(crate) struct SessionManager {
     repository: Arc<dyn VaultRepository>,
     vault_id: Mutex<Option<VaultId>>,
     workspace: Arc<dyn WorkspaceProvider>,
+    external_files: Arc<dyn crate::ExternalFileProvider>,
     clock: Arc<dyn MonotonicClock>,
     policy: SessionPolicy,
     data: Mutex<SessionData>,
@@ -2994,6 +3091,7 @@ impl SessionManager {
             repository: components.repository,
             vault_id: Mutex::new(vault_id),
             workspace: components.workspace,
+            external_files: components.external_files,
             clock: components.clock,
             policy: components.policy,
             data: Mutex::new(SessionData {
@@ -3071,6 +3169,28 @@ impl SessionManager {
             return Err(ServiceError::Locked);
         }
         Ok(lease)
+    }
+
+    pub(crate) fn open_import(
+        &self,
+        selection: crate::ImportSelection,
+    ) -> Result<crate::OpenedImport, ServiceError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.external_files.open_import(selection)
+        }))
+        .map_err(|_| ServiceError::ExecutorFailed)?
+        .map_err(map_external_host_error)
+    }
+
+    pub(crate) fn begin_export(
+        &self,
+        selection: crate::ExportSelection,
+    ) -> Result<crate::OpenedExport, ServiceError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.external_files.begin_export(selection)
+        }))
+        .map_err(|_| ServiceError::ExecutorFailed)?
+        .map_err(map_external_host_error)
     }
 
     pub(crate) fn acquire_replication(
@@ -4007,7 +4127,13 @@ impl SessionManager {
                 .map_err(|_| ServiceError::CleanupRequired)
         })
         .is_ok();
-        let clean = tracked_clean && base_clean;
+        let external_clean = catch_port_panic(|| {
+            self.external_files
+                .retry_cleanup()
+                .map_err(|_| ServiceError::CleanupRequired)
+        })
+        .is_ok();
+        let clean = tracked_clean && base_clean && external_clean;
         let mut data = self.data.lock().unwrap_or_else(|error| error.into_inner());
         data.state = if clean {
             SessionState::Locked
@@ -4024,6 +4150,26 @@ impl SessionManager {
             .ok_or(ServiceError::CleanupRequired)
             .map(|_| ())
             .map_err(|_| ServiceError::CleanupRequired)
+    }
+}
+
+fn map_external_host_error(error: crate::HostPortError) -> ServiceError {
+    match error {
+        crate::HostPortError::Cancelled => ServiceError::Cancelled,
+        crate::HostPortError::CapacityExceeded => ServiceError::CapacityExceeded,
+        crate::HostPortError::AllocationFailed => ServiceError::AllocationFailed,
+        crate::HostPortError::InvalidInput
+        | crate::HostPortError::Denied
+        | crate::HostPortError::Permission => ServiceError::InvalidInput,
+        crate::HostPortError::Unavailable => ServiceError::Unavailable,
+        crate::HostPortError::DestinationExists => ServiceError::DestinationExists,
+        crate::HostPortError::StaleCapability => ServiceError::StaleCapability,
+        crate::HostPortError::DurabilityPending => ServiceError::DurabilityPending,
+        crate::HostPortError::CleanupFailed => ServiceError::CleanupRequired,
+        crate::HostPortError::LiveWorkspace => ServiceError::Busy,
+        crate::HostPortError::DetachedEditor | crate::HostPortError::PlatformFailure => {
+            ServiceError::ExecutorFailed
+        }
     }
 }
 
@@ -4044,6 +4190,7 @@ pub(crate) fn map_repository_error(error: RepositoryPortError) -> ServiceError {
         RepositoryPortError::NotFound => ServiceError::Unavailable,
         RepositoryPortError::EntropyUnavailable => ServiceError::EntropyUnavailable,
         RepositoryPortError::IdentifierExhausted => ServiceError::IdentifierExhausted,
+        RepositoryPortError::StaleCapability => ServiceError::StaleCapability,
         RepositoryPortError::Unavailable => ServiceError::Unavailable,
         RepositoryPortError::PlatformFailure => ServiceError::ExecutorFailed,
     }
@@ -4051,10 +4198,14 @@ pub(crate) fn map_repository_error(error: RepositoryPortError) -> ServiceError {
 
 fn map_host_error(error: crate::HostPortError) -> ServiceError {
     match error {
+        crate::HostPortError::Cancelled => ServiceError::Cancelled,
         crate::HostPortError::CapacityExceeded => ServiceError::CapacityExceeded,
         crate::HostPortError::AllocationFailed => ServiceError::AllocationFailed,
         crate::HostPortError::LiveWorkspace => ServiceError::Busy,
         crate::HostPortError::CleanupFailed => ServiceError::CleanupRequired,
+        crate::HostPortError::DestinationExists => ServiceError::DestinationExists,
+        crate::HostPortError::StaleCapability => ServiceError::StaleCapability,
+        crate::HostPortError::DurabilityPending => ServiceError::DurabilityPending,
         crate::HostPortError::InvalidInput => ServiceError::InvalidConfiguration,
         crate::HostPortError::Unavailable
         | crate::HostPortError::Denied
