@@ -50,14 +50,6 @@ fn root_is_empty(root: &Path) -> bool {
     fs::read_dir(root).unwrap().next().is_none()
 }
 
-fn active_transaction_exists(repository: &Path) -> bool {
-    fs::read_dir(repository.join(".notecrypt-txn"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .any(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-}
-
 #[test]
 fn unlocked_source_streams_into_a_distinct_empty_physical_target_end_to_end() {
     let source_repository = TempDir::new().unwrap();
@@ -773,6 +765,8 @@ fn abort_and_drop_remove_all_owned_target_state() {
 
 #[test]
 fn source_lock_during_stream_prevents_target_verification_and_cleans_on_drop() {
+    use notecrypt_store::compromise_test_support::install_after_first_plaintext_write_hook;
+
     let source_repository = TempDir::new().unwrap();
     let source_local = TempDir::new().unwrap();
     let target_repository = TempDir::new().unwrap();
@@ -818,24 +812,23 @@ fn source_lock_during_stream_prevents_target_verification_and_cleans_on_drop() {
     let root = source.next_entry().unwrap().unwrap();
     target.stage_entry(source.as_mut(), root, &cancel).unwrap();
     let entry = source.next_entry().unwrap().unwrap();
-    let staging_finished = AtomicBool::new(false);
-    let stage_result = std::thread::scope(|scope| {
-        let closer = scope.spawn(|| {
-            while !active_transaction_exists(&target_repository_path) {
-                if staging_finished.load(Ordering::Acquire) {
-                    return false;
-                }
-                std::thread::yield_now();
-            }
-            source_unlocked.begin_close().unwrap();
-            true
-        });
-        let result = target.stage_entry(source.as_mut(), entry, &cancel);
-        staging_finished.store(true, Ordering::Release);
-        assert!(closer.join().unwrap());
-        result
+    let hook_fired = std::sync::Arc::new(AtomicBool::new(false));
+    let hook_observation = std::sync::Arc::clone(&hook_fired);
+    let revocation = source_unlocked.revocation_handle();
+    install_after_first_plaintext_write_hook(source_store.vault_id(), move || {
+        revocation.revoke();
+        hook_observation.store(true, Ordering::Release);
     });
-    assert!(matches!(stage_result, Err(StoreError::Locked)));
+    let stage_result = target.stage_entry(source.as_mut(), entry, &cancel);
+    assert!(hook_fired.load(Ordering::Acquire));
+    assert!(
+        matches!(stage_result, Err(StoreError::Locked)),
+        "source revocation after the first plaintext write returned {stage_result:?}"
+    );
+    assert!(matches!(
+        target.verify_complete(&cancel),
+        Err(StoreError::InvalidCapability)
+    ));
     drop(target);
     drop(source);
     source_unlocked.close().unwrap();

@@ -31,6 +31,8 @@ pub use cleanup::{
     RegisteredWorkspace, TrustedWorkspaceAbsenceVerifier, WorkspaceAbsenceAuthority,
     WorkspaceAbsenceGuard, WorkspaceAbsenceProof,
 };
+#[cfg(feature = "test-support")]
+pub use compromise::test_support as compromise_test_support;
 pub use compromise::{
     ActivatedVaultTarget, AuthenticatedLogicalEntry, CompromiseRekeySource, PendingVaultTarget,
 };
@@ -62,7 +64,10 @@ pub use replication::{
     ReplicationBudget, ReplicationCancellation, ReplicationCancellationProbe, ReplicationLease,
     ReplicationLimits,
 };
-pub use repository::{UnlockedVault, VaultRevocationHandle, VaultStore};
+pub use repository::{
+    PreparedWorkspaceRegistration, PreparedWorkspaceUnregister, UnlockedVault,
+    VaultRevocationHandle, VaultStore,
+};
 #[cfg(feature = "test-support")]
 pub use rollback::test_support as rollback_test_support;
 pub use transaction::PublicationGuard;

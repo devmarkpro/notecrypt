@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -8,7 +8,9 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded};
 use zeroize::Zeroizing;
 
 use crate::operation::{FinalSaveGuard, OperationState, lock};
-use crate::session::{RootCapabilitySlot, SessionManager};
+use crate::session::{
+    EDITOR_FORCE_REAP_GRACE, EditorQuiescenceObservation, RootCapabilitySlot, SessionManager,
+};
 use crate::{
     BeginCompromiseRekey, BeginRecoveryInitialization, Command, CompromiseRekeyConfirmation,
     FreshnessAcknowledgementView, OperationContext, OperationHandle, OperationId, OperationResult,
@@ -361,6 +363,7 @@ struct LockJob {
     root: Option<Arc<RootCapabilitySlot>>,
     final_save: Option<Arc<OperationState>>,
     grace_deadline: Option<std::time::Instant>,
+    force_reap_deadline: Option<std::time::Instant>,
 }
 
 struct SchedulerState {
@@ -376,6 +379,7 @@ struct SchedulerState {
     lock_job: Option<LockJob>,
     session_events: VecDeque<(u64, SessionEvent)>,
     unlock_in_progress: bool,
+    observer_in_flight: usize,
 }
 
 impl SchedulerState {
@@ -418,6 +422,7 @@ impl SchedulerState {
             lock_job: None,
             session_events,
             unlock_in_progress: false,
+            observer_in_flight: 0,
         })
     }
 }
@@ -438,7 +443,6 @@ pub(crate) struct ServiceInner {
     identity: Mutex<IdentityState>,
     pub(crate) session: Option<Arc<SessionManager>>,
     transitions: Mutex<TransitionRegistry>,
-    observer_in_flight: AtomicUsize,
 }
 
 const TRANSITION_PENDING: u8 = 0;
@@ -874,17 +878,19 @@ impl ServiceInner {
             .as_ref()
             .and_then(|session| session.begin_lock());
         let eager_root = root.as_ref().map(Arc::clone);
-        let grace_deadline = final_save.as_ref().and_then(|_| {
-            self.session.as_ref().and_then(|session| {
-                std::time::Instant::now().checked_add(session.final_save_grace())
-            })
-        });
+        let grace_deadline = self
+            .session
+            .as_ref()
+            .and_then(|session| std::time::Instant::now().checked_add(session.final_save_grace()));
+        let force_reap_deadline =
+            grace_deadline.and_then(|deadline| deadline.checked_add(EDITOR_FORCE_REAP_GRACE));
         if scheduler.lock_job.is_none() {
             scheduler.lock_job = Some(LockJob {
                 generation,
                 root,
                 final_save,
                 grace_deadline,
+                force_reap_deadline,
             });
         }
         if scheduler.controls.global_notified != Some(generation) {
@@ -1091,6 +1097,70 @@ impl ServiceInner {
         {
             session.mark_cleanup_required();
         }
+        let mut editors_quiescent = true;
+        if let Some(session) = &self.session {
+            let mut callbacks_ok = session.request_editor_stop();
+            let mut quiescent = false;
+            loop {
+                match session.editors_are_quiescent() {
+                    EditorQuiescenceObservation::Known(true) => {
+                        quiescent = true;
+                        break;
+                    }
+                    EditorQuiescenceObservation::Known(false)
+                    | EditorQuiescenceObservation::Unknown => {}
+                    EditorQuiescenceObservation::Panicked => callbacks_ok = false,
+                }
+                let Some(deadline) = job.grace_deadline else {
+                    break;
+                };
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                let scheduler = lock(&self.scheduler);
+                let _ = self
+                    .scheduler_changed
+                    .wait_timeout(
+                        scheduler,
+                        remaining.min(std::time::Duration::from_millis(10)),
+                    )
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+            if !quiescent {
+                callbacks_ok &= session.force_editor_stop();
+                loop {
+                    match session.editors_are_quiescent() {
+                        EditorQuiescenceObservation::Known(true) => {
+                            quiescent = true;
+                            break;
+                        }
+                        EditorQuiescenceObservation::Known(false)
+                        | EditorQuiescenceObservation::Unknown => {}
+                        EditorQuiescenceObservation::Panicked => callbacks_ok = false,
+                    }
+                    let Some(deadline) = job.force_reap_deadline else {
+                        break;
+                    };
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    let scheduler = lock(&self.scheduler);
+                    let _ = self
+                        .scheduler_changed
+                        .wait_timeout(
+                            scheduler,
+                            deadline
+                                .saturating_duration_since(now)
+                                .min(std::time::Duration::from_millis(10)),
+                        )
+                        .unwrap_or_else(|error| error.into_inner());
+                }
+            }
+            editors_quiescent = callbacks_ok && quiescent;
+        }
         if let Some(final_save) = &job.final_save
             && final_save.cancelled.load(Ordering::Acquire)
         {
@@ -1124,7 +1194,7 @@ impl ServiceInner {
                 .any(|state| state.session_generation == Some(generation))
         );
         if let Some(session) = &self.session {
-            session.finish_lock_after_close(root_was_present, close_failed);
+            session.finish_lock_after_close(root_was_present, close_failed, editors_quiescent);
         }
     }
 
@@ -1874,7 +1944,6 @@ impl ServiceHandle {
             }),
             session,
             transitions: Mutex::new(TransitionRegistry::new(config.completed_capacity)?),
-            observer_in_flight: AtomicUsize::new(0),
         });
 
         thread::Builder::new()
@@ -2169,7 +2238,7 @@ impl ServiceHandle {
                 || scheduler.unlock_in_progress
                 || !scheduler.active.is_empty()
                 || scheduler.lock_job.is_some()
-                || inner.observer_in_flight.load(Ordering::Acquire) != 0
+                || scheduler.observer_in_flight != 0
             {
                 return Err(ServiceError::Locked);
             }
@@ -2973,20 +3042,38 @@ fn discard_work_item(inner: &ServiceInner, item: WorkItem, error: ServiceError) 
     }
 }
 
+fn complete_control_observation(inner: &ServiceInner, pending: PendingControl) {
+    let mut scheduler = lock(&inner.scheduler);
+    scheduler.observer_in_flight = scheduler
+        .observer_in_flight
+        .checked_sub(1)
+        .expect("a delivered control must retain one observer reservation");
+    if pending.trusted_activity
+        && scheduler.controls.trusted_activity_pending == Some(pending.generation)
+    {
+        scheduler.controls.trusted_activity_pending = None;
+        scheduler.controls.trusted_activity_dispatched = None;
+    }
+    inner.scheduler_changed.notify_all();
+}
+
 fn coordinator_loop(inner: Arc<ServiceInner>) {
     let mut pending: Option<WorkItem> = None;
     loop {
         let control = {
             let mut scheduler = lock(&inner.scheduler);
             loop {
-                if let Some(global) = scheduler.controls.pop_global() {
-                    break Some(global);
-                }
-                if let Some(activity) = scheduler.controls.pop_trusted_activity() {
-                    break Some(activity);
-                }
-                if let Some(control) = scheduler.controls.pop() {
-                    break Some(control);
+                let pending_control = scheduler
+                    .controls
+                    .pop_global()
+                    .or_else(|| scheduler.controls.pop_trusted_activity())
+                    .or_else(|| scheduler.controls.pop());
+                if let Some(pending_control) = pending_control {
+                    if pending_control.generation != scheduler.generation {
+                        continue;
+                    }
+                    scheduler.observer_in_flight += 1;
+                    break Some(pending_control);
                 }
                 if scheduler.closed {
                     scheduler.active.clear();
@@ -3002,7 +3089,7 @@ fn coordinator_loop(inner: Arc<ServiceInner>) {
                     lock(&inner.cancellation_sender).take();
                     return;
                 }
-                if inner.observer_in_flight.load(Ordering::Acquire) != 0 {
+                if scheduler.observer_in_flight != 0 {
                     drop(
                         inner
                             .scheduler_changed
@@ -3050,23 +3137,16 @@ fn coordinator_loop(inner: Arc<ServiceInner>) {
         if let Some(pending_control) = control {
             let current_generation = lock(&inner.scheduler).generation;
             if pending_control.generation != current_generation {
+                complete_control_observation(&inner, pending_control);
                 continue;
             }
             if pending_control.trusted_activity {
-                inner.observer_in_flight.fetch_add(1, Ordering::AcqRel);
                 let sender = lock(&inner.control_sender);
                 let delivered = sender
                     .as_ref()
                     .is_some_and(|sender| sender.try_send(pending_control).is_ok());
                 if !delivered {
-                    inner.observer_in_flight.fetch_sub(1, Ordering::AcqRel);
-                    let mut scheduler = lock(&inner.scheduler);
-                    if scheduler.controls.trusted_activity_pending
-                        == Some(pending_control.generation)
-                    {
-                        scheduler.controls.trusted_activity_pending = None;
-                        scheduler.controls.trusted_activity_dispatched = None;
-                    }
+                    complete_control_observation(&inner, pending_control);
                 }
                 continue;
             }
@@ -3079,7 +3159,6 @@ fn coordinator_loop(inner: Arc<ServiceInner>) {
             }
             let observer_reserved = pending_control.control.is_global();
             if observer_reserved {
-                inner.observer_in_flight.fetch_add(1, Ordering::AcqRel);
                 inner.process_lock_job(pending_control.generation);
             } else if let Control::Cancel(id) = pending_control.control {
                 inner.acknowledge_cancel(id);
@@ -3087,21 +3166,15 @@ fn coordinator_loop(inner: Arc<ServiceInner>) {
             let sender = lock(&inner.control_sender);
             let mut delivery_failed = false;
             if let Some(sender) = sender.as_ref() {
-                if !observer_reserved {
-                    inner.observer_in_flight.fetch_add(1, Ordering::AcqRel);
-                }
                 if sender.try_send(pending_control).is_err() {
-                    inner.observer_in_flight.fetch_sub(1, Ordering::AcqRel);
                     delivery_failed = true;
                 }
-            } else if observer_reserved {
-                inner.observer_in_flight.fetch_sub(1, Ordering::AcqRel);
-                delivery_failed = true;
             } else {
                 delivery_failed = true;
             }
             drop(sender);
             if delivery_failed {
+                complete_control_observation(&inner, pending_control);
                 inner.shutdown();
             }
         }
@@ -3140,25 +3213,15 @@ fn deadline_loop(inner: Arc<ServiceInner>) {
 fn control_observer_loop(inner: Arc<ServiceInner>, receiver: Receiver<PendingControl>) {
     while let Ok(pending) = receiver.recv() {
         if lock(&inner.scheduler).generation != pending.generation {
-            inner.observer_in_flight.fetch_sub(1, Ordering::AcqRel);
-            inner.scheduler_changed.notify_all();
+            complete_control_observation(&inner, pending);
             continue;
         }
         let panicked =
             catch_unwind(AssertUnwindSafe(|| inner.executor.control(pending.control))).is_err();
-        inner.observer_in_flight.fetch_sub(1, Ordering::AcqRel);
-        inner.scheduler_changed.notify_all();
+        complete_control_observation(&inner, pending);
         if panicked {
             inner.shutdown();
             return;
-        }
-        if pending.trusted_activity {
-            let mut scheduler = lock(&inner.scheduler);
-            if scheduler.controls.trusted_activity_pending == Some(pending.generation) {
-                scheduler.controls.trusted_activity_pending = None;
-                scheduler.controls.trusted_activity_dispatched = None;
-                inner.scheduler_changed.notify_all();
-            }
         }
     }
 }
@@ -3326,8 +3389,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Command, OperationContext, OperationExecutor, OperationIdRandom, OperationResult,
-        OperationState, ServiceConfig, ServiceError, ServiceHandle, lock,
+        Command, Control, OperationContext, OperationExecutor, OperationIdRandom, OperationResult,
+        OperationState, PendingControl, ServiceConfig, ServiceError, ServiceHandle,
+        complete_control_observation, lock,
     };
 
     struct FreshnessCounts {
@@ -3441,6 +3505,72 @@ mod tests {
         ) -> Result<OperationResult, ServiceError> {
             unreachable!("the global control must reject this submission")
         }
+    }
+
+    #[test]
+    fn observer_completion_is_scheduler_owned_and_wakes_waiters() {
+        let runtime = ServiceHandle::with_components(
+            ServiceConfig::default(),
+            Arc::new(NoopExecutor),
+            Arc::new(crate::OsOperationIdRandom),
+        )
+        .unwrap();
+        let inner = Arc::clone(&runtime.client.inner);
+        let generation = {
+            let mut scheduler = lock(&inner.scheduler);
+            scheduler.observer_in_flight = 1;
+            scheduler.generation
+        };
+
+        let (waiter_ready_tx, waiter_ready_rx) = bounded(1);
+        let (woke_tx, woke_rx) = bounded(1);
+        let waiter_inner = Arc::clone(&inner);
+        let waiter = thread::spawn(move || {
+            let mut scheduler = lock(&waiter_inner.scheduler);
+            while scheduler.observer_in_flight != 0 {
+                let _ = waiter_ready_tx.try_send(());
+                scheduler = waiter_inner
+                    .scheduler_changed
+                    .wait(scheduler)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+            woke_tx.send(()).unwrap();
+        });
+        waiter_ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+
+        let scheduler = lock(&inner.scheduler);
+        assert_eq!(scheduler.observer_in_flight, 1);
+        let (completion_started_tx, completion_started_rx) = bounded(1);
+        let (completion_tx, completion_rx) = bounded(1);
+        let completion_inner = Arc::clone(&inner);
+        let completion = thread::spawn(move || {
+            completion_started_tx.send(()).unwrap();
+            complete_control_observation(
+                &completion_inner,
+                PendingControl {
+                    control: Control::UserActivity,
+                    generation,
+                    trusted_activity: false,
+                },
+            );
+            completion_tx.send(()).unwrap();
+        });
+        completion_started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert!(matches!(
+            completion_rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        ));
+
+        drop(scheduler);
+        completion_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        woke_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        completion.join().unwrap();
+        waiter.join().unwrap();
+        assert_eq!(lock(&inner.scheduler).observer_in_flight, 0);
     }
 
     struct BlockingRandom {

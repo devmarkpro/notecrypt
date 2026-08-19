@@ -329,6 +329,7 @@ struct PendingCancelOrderExecutor {
     control_gate: Arc<Gate>,
     first_entered: mpsc::Sender<()>,
     order: mpsc::Sender<&'static str>,
+    activity_callbacks: AtomicUsize,
 }
 
 struct BackendBoundaryExecutor {
@@ -375,10 +376,13 @@ impl OperationExecutor for PendingCancelOrderExecutor {
     fn control(&self, control: Control) {
         match control {
             Control::UserActivity => {
+                let callback = self.activity_callbacks.fetch_add(1, Ordering::AcqRel);
                 self.order
                     .send("activity-entered")
                     .expect("test observer is alive");
-                self.control_gate.wait();
+                if callback == 0 {
+                    self.control_gate.wait();
+                }
             }
             Control::Cancel(_) => {
                 self.order.send("cancel").expect("test observer is alive");
@@ -543,16 +547,19 @@ fn progress_is_visible_promptly_after_the_worker_reaches_a_boundary() {
 
 #[test]
 fn saturated_work_returns_busy_but_priority_controls_remain_accepted() {
-    let gate = Arc::new(Gate::default());
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (boundary_tx, _boundary_rx) = mpsc::channel();
+    let first_gate = Arc::new(Gate::default());
+    let control_gate = Arc::new(Gate::default());
+    let (first_entered_tx, first_entered_rx) = mpsc::channel();
+    let (order_tx, order_rx) = mpsc::channel();
+    let executor = Arc::new(PendingCancelOrderExecutor {
+        first_gate: Arc::clone(&first_gate),
+        control_gate: Arc::clone(&control_gate),
+        first_entered: first_entered_tx,
+        order: order_tx,
+        activity_callbacks: AtomicUsize::new(0),
+    });
     let runtime = service(
-        Arc::new(BlockingExecutor {
-            gate: Arc::clone(&gate),
-            entered: entered_tx,
-            boundary: boundary_tx,
-            executions: AtomicUsize::new(0),
-        }),
+        executor.clone(),
         Arc::new(ScriptedRandom::new([
             random_id(4),
             random_id(5),
@@ -561,7 +568,12 @@ fn saturated_work_returns_busy_but_priority_controls_remain_accepted() {
         config(1, 1, 2),
     );
     let active = runtime.submit(Command::List(ListEntries)).unwrap();
-    entered_rx.recv_timeout(SHORT_WAIT).unwrap();
+    first_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
+    assert_eq!(runtime.control(Control::UserActivity), Ok(()));
+    assert_eq!(
+        order_rx.recv_timeout(SHORT_WAIT).unwrap(),
+        "activity-entered"
+    );
     let queued = runtime
         .submit(Command::CreateDirectory(CreateDirectory))
         .unwrap();
@@ -575,12 +587,34 @@ fn saturated_work_returns_busy_but_priority_controls_remain_accepted() {
     assert_eq!(runtime.control(Control::Cancel(queued.id())), Ok(()));
     assert_eq!(runtime.control(Control::UserActivity), Ok(()));
 
-    gate.release(1);
+    first_gate.release(1);
     assert_eq!(
         active.wait_result(SHORT_WAIT),
         Ok(OperationResult::Entries(EntrySummaries::empty()))
     );
-    assert_eq!(queued.wait_result(SHORT_WAIT), Err(ServiceError::Cancelled));
+    match order_rx.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => {}
+        unexpected => panic!("work ran while the control observer was blocked: {unexpected:?}"),
+    }
+
+    control_gate.release(1);
+    assert_eq!(order_rx.recv_timeout(SHORT_WAIT).unwrap(), "cancel");
+    assert_eq!(
+        order_rx.recv_timeout(SHORT_WAIT).unwrap(),
+        "activity-entered"
+    );
+    let queued_result = queued.wait_result(SHORT_WAIT);
+    assert_eq!(
+        queued_result,
+        Err(ServiceError::Cancelled),
+        "snapshot={:?}, activity_callbacks={}",
+        runtime.snapshot(),
+        executor.activity_callbacks.load(Ordering::Acquire)
+    );
+    assert!(matches!(
+        order_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
 }
 
 #[test]
@@ -1187,24 +1221,28 @@ fn completed_cancellation_notice_is_processed_before_later_ordinary_work() {
             control_gate: Arc::clone(&control_gate),
             first_entered: first_entered_tx,
             order: order_tx,
+            activity_callbacks: AtomicUsize::new(0),
         }),
         Arc::new(ScriptedRandom::new([random_id(129)])),
         config(1, 1, 2),
     );
     let first = runtime.submit(Command::List(ListEntries)).unwrap();
     first_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
-    let ordinary = runtime
-        .submit(Command::CreateDirectory(CreateDirectory))
-        .unwrap();
     runtime.control(Control::UserActivity).unwrap();
     assert_eq!(
         order_rx.recv_timeout(SHORT_WAIT).unwrap(),
         "activity-entered"
     );
+    let ordinary = runtime
+        .submit(Command::CreateDirectory(CreateDirectory))
+        .unwrap();
     runtime.control(Control::Cancel(first.id())).unwrap();
     first_gate.release(1);
     assert_eq!(first.wait_result(SHORT_WAIT), Err(ServiceError::Cancelled));
-    assert!(order_rx.try_recv().is_err());
+    match order_rx.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => {}
+        unexpected => panic!("work ran while the control observer was blocked: {unexpected:?}"),
+    }
 
     control_gate.release(1);
     assert_eq!(order_rx.recv_timeout(SHORT_WAIT).unwrap(), "cancel");

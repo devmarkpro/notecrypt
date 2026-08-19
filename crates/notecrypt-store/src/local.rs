@@ -728,6 +728,8 @@ impl VaultStore {
         passphrase: RecoveryPassphrase,
         cancel: &AtomicBool,
     ) -> Result<UnlockedVault, StoreError> {
+        #[cfg(feature = "test-support")]
+        test_support::run_before_recovery_unlock_hook(self.layout.vault);
         let (keys, bootstrap_bytes) = self.recovery_keys(passphrase, cancel)?;
         unlock_with_keys(self, keys, Some(bootstrap_bytes), Some(cancel))
     }
@@ -998,7 +1000,10 @@ pub(crate) fn unlock_with_keys(
             generation,
             1_024,
             OsRandom,
-            FilesystemCleanupPersistence::new(&store.layout.cleanup_registry),
+            FilesystemCleanupPersistence::new(
+                &store.layout.cleanup_registry,
+                &store.layout.cleanup_staging,
+            ),
         )?;
         cleanup.authenticated_records(keys.as_ref())?;
         check_graph_boundary(&keys, generation, cancel)?;
@@ -1145,6 +1150,11 @@ impl VaultStore {
 }
 
 impl UnlockedVaultLease {
+    #[cfg(feature = "test-support")]
+    pub(crate) fn vault_id(&self) -> VaultId {
+        self.store.layout.vault
+    }
+
     pub(crate) fn validate_generation(&self) -> Result<(), StoreError> {
         self.keys.validate_generation(self.generation)
     }
@@ -2528,7 +2538,7 @@ fn write_bootstrap(store: &VaultStore, bytes: &[u8]) -> Result<(), StoreError> {
 
 fn write_pending_activation_marker(store: &VaultStore) -> Result<(), StoreError> {
     let name = component(PENDING_ACTIVATION_FILE)?;
-    let file = store.layout.repository.create_file_new(&name)?;
+    let file = store.layout.repository.create_private_file_new(&name)?;
     file.sync_all()?;
     store.layout.repository.sync()?;
     match store.layout.repository.entry_kind(&name) {
@@ -3533,6 +3543,11 @@ pub mod test_support {
         HOOK.get_or_init(|| Mutex::new(None))
     }
 
+    fn before_recovery_unlock() -> &'static Mutex<Option<(VaultId, SendHook)>> {
+        static HOOK: OnceLock<Mutex<Option<(VaultId, SendHook)>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
     fn authenticated_read_fault() -> &'static Mutex<Option<(VaultId, AuthenticatedReadFault)>> {
         static FAULT: OnceLock<Mutex<Option<(VaultId, AuthenticatedReadFault)>>> = OnceLock::new();
         FAULT.get_or_init(|| Mutex::new(None))
@@ -3579,6 +3594,17 @@ pub mod test_support {
 
     pub fn install_after_recovery_keys_hook(vault: VaultId, hook: impl FnOnce() + Send + 'static) {
         let mut slot = after_recovery_keys()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(slot.is_none(), "recovery unlock hook already installed");
+        *slot = Some((vault, Box::new(hook)));
+    }
+
+    pub fn install_before_recovery_unlock_hook(
+        vault: VaultId,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        let mut slot = before_recovery_unlock()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         assert!(slot.is_none(), "recovery unlock hook already installed");
@@ -3717,6 +3743,21 @@ pub mod test_support {
     pub(crate) fn run_after_recovery_keys_hook(vault: VaultId) {
         let hook = {
             let mut slot = after_recovery_keys()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match slot.as_ref() {
+                Some((target, _)) if *target == vault => slot.take().map(|(_, hook)| hook),
+                _ => None,
+            }
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(crate) fn run_before_recovery_unlock_hook(vault: VaultId) {
+        let hook = {
+            let mut slot = before_recovery_unlock()
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             match slot.as_ref() {

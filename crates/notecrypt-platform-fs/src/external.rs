@@ -9,8 +9,11 @@ use std::sync::Mutex;
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::OpenOptions;
 
+#[cfg(windows)]
+use super::configure_rename_file_open_options;
 use super::{
-    Directory, FileCapability, FileStamp, PhysicalComponent, published_matches_exact_source,
+    Directory, ExactDirectoryRemovalStage, ExactFileRemovalStage, FileCapability, FileStamp,
+    PhysicalComponent, allocation_error, published_matches_exact_source,
     rename_no_replace_observed, rename_replace,
 };
 
@@ -115,9 +118,15 @@ impl ExternalFileSet {
     /// Opens one exact regular, single-link input and captures its stable stamp.
     pub fn open_stable_import(&self, path: &Path) -> io::Result<StableImport> {
         let (parent, name) = self.open_external_parent(path)?;
+        let retained_name = try_copy_external_component(name)?;
         let file = open_external_file(&parent, name, false)?;
         let initial = file.stamp()?;
-        Ok(StableImport { file, initial })
+        Ok(StableImport {
+            file,
+            initial,
+            parent,
+            name: retained_name,
+        })
     }
 
     /// Creates private same-parent staging for an explicit export destination.
@@ -134,6 +143,12 @@ impl ExternalFileSet {
         path: &Path,
         overwrite: ExportOverwrite,
     ) -> Result<ExportTransaction, ExportBeginError> {
+        let mut transaction_state = Vec::new();
+        transaction_state.try_reserve_exact(1).map_err(|_| {
+            ExportBeginError::without_cleanup(allocation_error(
+                "export cleanup authority allocation failed",
+            ))
+        })?;
         let (parent, destination) = self
             .open_external_parent(path)
             .map_err(ExportBeginError::without_cleanup)?;
@@ -153,7 +168,7 @@ impl ExternalFileSet {
         retained_destination
             .try_reserve_exact(destination.as_os_str().as_encoded_bytes().len())
             .map_err(|_| {
-                ExportBeginError::without_cleanup(io::Error::other(
+                ExportBeginError::without_cleanup(allocation_error(
                     "destination-name allocation failed",
                 ))
             })?;
@@ -162,7 +177,7 @@ impl ExternalFileSet {
             PhysicalComponent::try_new("payload").map_err(ExportBeginError::without_cleanup)?;
         let (staging_name, staging) =
             create_random_private_staging(&parent).map_err(ExportBeginError::without_cleanup)?;
-        let mut transaction = ExportTransaction {
+        transaction_state.push(ExportTransactionState {
             parent: Some(parent),
             destination: retained_destination,
             expected_destination,
@@ -173,9 +188,16 @@ impl ExternalFileSet {
             source_moved: false,
             destination_visible: false,
             #[cfg(any(test, feature = "test-support"))]
+            cleanup_diagnostic: None,
+            #[cfg(any(test, feature = "test-support"))]
             cleanup_failures_remaining: 0,
             #[cfg(any(test, feature = "test-support"))]
+            final_staging_sync_failures_remaining: 0,
+            #[cfg(any(test, feature = "test-support"))]
             panic_on_publish: false,
+        });
+        let mut transaction = ExportTransaction {
+            state: transaction_state,
         };
         #[cfg(any(test, feature = "test-support"))]
         let begin_fault = self
@@ -189,20 +211,21 @@ impl ExternalFileSet {
             Err(io::Error::other("injected payload creation failure"))
         } else {
             transaction
+                .state()
                 .staging
                 .as_ref()
                 .expect("new export owns staging")
-                .create_file_new(&transaction.payload_name)
+                .create_private_file_new(&transaction.state().payload_name)
         };
         match payload {
             Ok(payload) => {
-                transaction.payload = Some(payload);
+                transaction.state_mut().payload = Some(payload);
                 Ok(transaction)
             }
             Err(primary) => {
                 #[cfg(any(test, feature = "test-support"))]
                 if let Some(fault) = begin_fault {
-                    transaction.cleanup_failures_remaining = fault.cleanup_failures;
+                    transaction.state_mut().cleanup_failures_remaining = fault.cleanup_failures;
                 }
                 match transaction.cleanup_owned_staging() {
                     Ok(()) => Err(ExportBeginError::without_cleanup(primary)),
@@ -257,22 +280,53 @@ impl ExternalFileSet {
 pub struct StableImport {
     file: FileCapability,
     initial: FileStamp,
+    parent: Directory,
+    name: std::path::PathBuf,
 }
 
 impl StableImport {
     /// Clones the exact held descriptor into an independent publication validator.
     pub fn try_validator(&self) -> io::Result<StableImportValidator> {
+        let name = try_copy_external_component(&self.name)?;
+        let parent = self.parent.try_clone()?;
         Ok(StableImportValidator {
             file: FileCapability {
                 inner: self.file.inner.try_clone()?,
             },
             initial: self.initial,
+            parent,
+            name,
         })
     }
 
     /// Verifies the exact held regular file has not changed since selection.
     pub fn validate_unchanged(&self) -> io::Result<()> {
-        validate_stable_import(&self.file, self.initial)
+        validate_stable_import(&self.file, self.initial, &self.parent, &self.name)
+    }
+
+    #[cfg(all(windows, feature = "test-support"))]
+    pub(crate) fn observation(&self) -> io::Result<StableImportObservation> {
+        let named = self.parent.open_file_nofollow_path(&self.name)?;
+        Ok(StableImportObservation {
+            held_stamp_unchanged: self.file.stamp()? == self.initial,
+            selected_name_matches: self.file.same_file(&named)?,
+        })
+    }
+
+    #[cfg(all(windows, feature = "test-support"))]
+    pub(crate) fn validator_with_current_stamp(&self) -> io::Result<StableImportValidator> {
+        let name = try_copy_external_component(&self.name)?;
+        let parent = self.parent.try_clone()?;
+        let file = FileCapability {
+            inner: self.file.inner.try_clone()?,
+        };
+        let initial = file.stamp()?;
+        Ok(StableImportValidator {
+            file,
+            initial,
+            parent,
+            name,
+        })
     }
 }
 
@@ -280,13 +334,23 @@ impl StableImport {
 pub struct StableImportValidator {
     file: FileCapability,
     initial: FileStamp,
+    parent: Directory,
+    name: std::path::PathBuf,
 }
 
 impl StableImportValidator {
     /// Rejects publication if the selected file changed after it was opened.
     pub fn validate_unchanged(&self) -> io::Result<()> {
-        validate_stable_import(&self.file, self.initial)
+        validate_stable_import(&self.file, self.initial, &self.parent, &self.name)
     }
+}
+
+/// Fixed, path-free observation of the retained Windows import binding.
+#[cfg(all(windows, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StableImportObservation {
+    pub held_stamp_unchanged: bool,
+    pub selected_name_matches: bool,
 }
 
 impl fmt::Debug for StableImportValidator {
@@ -309,6 +373,21 @@ impl fmt::Debug for StableImport {
 
 /// Private export staging that can be atomically published or explicitly aborted.
 pub struct ExportTransaction {
+    state: Vec<ExportTransactionState>,
+}
+
+/// Fixed, path-free proof of the exact retained Windows export payload contract.
+#[cfg(all(windows, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportPayloadAttestation {
+    pub private: bool,
+    pub single_regular_link: bool,
+    pub mutation_local_durable: bool,
+    pub cleanup_reopen_matches: bool,
+    pub access: u32,
+}
+
+struct ExportTransactionState {
     parent: Option<Directory>,
     destination: std::path::PathBuf,
     expected_destination: Option<FileCapability>,
@@ -319,7 +398,11 @@ pub struct ExportTransaction {
     source_moved: bool,
     destination_visible: bool,
     #[cfg(any(test, feature = "test-support"))]
+    cleanup_diagnostic: Option<ExportCleanupDiagnostic>,
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) cleanup_failures_remaining: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    final_staging_sync_failures_remaining: usize,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) panic_on_publish: bool,
 }
@@ -339,14 +422,57 @@ pub struct ExportPublishAttemptError {
 
 /// Exact owned-staging capability retained until cleanup is proven complete.
 pub struct ExportCleanupPending {
-    transaction: Option<Box<ExportTransaction>>,
+    transaction: Option<ExportTransaction>,
+}
+
+/// Fixed, path-free stage for one exact owned-export cleanup attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportCleanupStage {
+    #[cfg(any(test, feature = "test-support"))]
+    InjectedBeforeCleanup,
+    PayloadNamedOpen,
+    PayloadIdentity,
+    #[cfg(windows)]
+    PayloadCleanupOpen,
+    PayloadDisposition,
+    PayloadAbsence,
+    StagingSync,
+    #[cfg(windows)]
+    StagingCleanupOpen,
+    StagingIdentity,
+    StagingDisposition,
+    StagingAbsence,
+}
+
+/// Fixed, path-free evidence for one exact owned-export cleanup failure.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportCleanupDiagnostic {
+    pub stage: ExportCleanupStage,
+    pub kind: io::ErrorKind,
+    pub raw_os_error: Option<i32>,
 }
 
 impl ExportCleanupPending {
     fn new(transaction: ExportTransaction) -> Self {
         Self {
-            transaction: Some(Box::new(transaction)),
+            transaction: Some(transaction),
         }
+    }
+
+    /// Returns path-free evidence for the exact retained transaction's last cleanup attempt.
+    #[cfg(feature = "test-support")]
+    pub fn diagnostic(&self) -> Option<ExportCleanupDiagnostic> {
+        self.transaction
+            .as_ref()
+            .and_then(|transaction| transaction.state().cleanup_diagnostic)
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn cleanup_authority_storage_is_preallocated(&self) -> bool {
+        self.transaction
+            .as_ref()
+            .is_some_and(ExportTransaction::cleanup_authority_storage_is_preallocated)
     }
 
     /// Retries cleanup while preserving the exact capability on failure.
@@ -460,14 +586,90 @@ impl fmt::Display for ExportPublishAttemptError {
 impl std::error::Error for ExportPublishAttemptError {}
 
 impl ExportTransaction {
+    fn state(&self) -> &ExportTransactionState {
+        self.state
+            .first()
+            .expect("export transaction retains one preallocated state")
+    }
+
+    fn state_mut(&mut self) -> &mut ExportTransactionState {
+        self.state
+            .first_mut()
+            .expect("export transaction retains one preallocated state")
+    }
+
+    #[cfg(all(windows, feature = "test-support"))]
+    pub(crate) fn payload_attestation(&self) -> io::Result<ExportPayloadAttestation> {
+        let state = self.state();
+        let staging = state
+            .staging
+            .as_ref()
+            .ok_or_else(|| io::Error::other("export staging is not retained"))?;
+        let payload = state
+            .payload
+            .as_ref()
+            .ok_or_else(|| io::Error::other("export payload is not retained"))?;
+        payload.require_single_regular_link()?;
+        super::verify_private_file(payload)?;
+        let mutation_local_durable = super::windows::file_is_write_through(&payload.inner)?;
+        let access = super::windows::file_access(&payload.inner)?;
+        let cleanup = staging.open_private_file_for_exact_removal(state.payload_name.as_path())?;
+        let cleanup_reopen_matches = payload.same_file(&cleanup)?;
+        drop(cleanup);
+
+        Ok(ExportPayloadAttestation {
+            private: true,
+            single_regular_link: true,
+            mutation_local_durable,
+            cleanup_reopen_matches,
+            access,
+        })
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn inject_cleanup_failures(&mut self, failures: usize) {
+        self.state_mut().cleanup_failures_remaining = failures;
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn inject_publish_panic(&mut self) {
+        self.state_mut().panic_on_publish = true;
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn inject_final_staging_sync_failure(&mut self) {
+        self.state_mut().final_staging_sync_failures_remaining = 1;
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn cleanup_authority_storage_is_preallocated(&self) -> bool {
+        self.state.len() == 1 && self.state.capacity() >= 1
+    }
+
+    fn cleanup_failure<T>(&mut self, stage: ExportCleanupStage, error: io::Error) -> io::Result<T> {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.state().cleanup_diagnostic.is_none() {
+            self.state_mut().cleanup_diagnostic = Some(ExportCleanupDiagnostic {
+                stage,
+                kind: error.kind(),
+                raw_os_error: error.raw_os_error(),
+            });
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        let _ = stage;
+        Err(error)
+    }
+
     /// Flushes the complete private plaintext file before publication.
     pub fn flush_private(&mut self) -> io::Result<()> {
         let payload = self
+            .state()
             .payload
             .as_ref()
             .ok_or_else(|| io::Error::other("export transaction is closed"))?;
         payload.sync_all()?;
-        self.staging
+        self.state()
+            .staging
             .as_ref()
             .ok_or_else(|| io::Error::other("export transaction is closed"))?
             .sync()
@@ -494,7 +696,7 @@ impl ExportTransaction {
                 })
             }
             Err(_) => {
-                let effect = if self.destination_visible {
+                let effect = if self.state().destination_visible {
                     ExportPublicationEffect::PublishedDurabilityPending
                 } else {
                     ExportPublicationEffect::NotPublished
@@ -515,14 +717,14 @@ impl ExportTransaction {
     /// Attempts publication while retaining the exact transaction for panic-safe cleanup.
     pub fn try_publish(&mut self) -> Result<ExportPublicationEffect, ExportPublishAttemptError> {
         #[cfg(any(test, feature = "test-support"))]
-        if std::mem::replace(&mut self.panic_on_publish, false) {
+        if std::mem::replace(&mut self.state_mut().panic_on_publish, false) {
             panic!("injected external export publication panic");
         }
         match self.publish_inner() {
             Ok(()) => Ok(ExportPublicationEffect::PublishedDurable),
             Err(primary) => Err(ExportPublishAttemptError {
                 primary,
-                effect: if self.destination_visible {
+                effect: if self.state().destination_visible {
                     ExportPublicationEffect::PublishedDurabilityPending
                 } else {
                     ExportPublicationEffect::NotPublished
@@ -533,71 +735,74 @@ impl ExportTransaction {
 
     fn publish_inner(&mut self) -> io::Result<()> {
         self.flush_private()?;
-        drop(self.payload.take());
-        let staging = self
-            .staging
-            .as_ref()
-            .ok_or_else(|| io::Error::other("export transaction is closed"))?;
-        let parent = self
-            .parent
-            .as_ref()
-            .ok_or_else(|| io::Error::other("export transaction is closed"))?;
-        let source = staging.open_file_for_rename_nofollow(&self.payload_name)?;
-        match self.expected_destination.as_ref() {
-            None => {
-                match rename_no_replace_observed(
-                    &source,
-                    &staging.inner,
-                    self.payload_name.as_path(),
-                    &parent.inner,
-                    &self.destination,
-                ) {
-                    Ok(()) => {
-                        self.destination_visible = true;
-                        self.source_moved = true;
+        {
+            let state = self.state_mut();
+            drop(state.payload.take());
+            let staging = state
+                .staging
+                .as_ref()
+                .ok_or_else(|| io::Error::other("export transaction is closed"))?;
+            let parent = state
+                .parent
+                .as_ref()
+                .ok_or_else(|| io::Error::other("export transaction is closed"))?;
+            let source = staging.open_file_for_rename_nofollow(&state.payload_name)?;
+            match state.expected_destination.as_ref() {
+                None => {
+                    match rename_no_replace_observed(
+                        &source,
+                        &staging.inner,
+                        state.payload_name.as_path(),
+                        parent,
+                        &state.destination,
+                    ) {
+                        Ok(()) => {
+                            state.destination_visible = true;
+                            state.source_moved = true;
+                        }
+                        Err(failure) => {
+                            state.destination_visible = failure.destination_may_be_visible;
+                            return Err(failure.primary);
+                        }
                     }
-                    Err(failure) => {
-                        self.destination_visible = failure.destination_may_be_visible;
-                        return Err(failure.primary);
+                    let published = open_external_file(parent, &state.destination, false)?;
+                    if !published_matches_exact_source(&source, &published)? {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "published export identity changed",
+                        ));
                     }
                 }
-                let published = open_external_file(parent, &self.destination, false)?;
-                if !published_matches_exact_source(&source, &published)? {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "published export identity changed",
-                    ));
+                Some(expected) => {
+                    let named_destination = open_external_file(parent, &state.destination, true)?;
+                    if !expected.same_file(&named_destination)? {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "export destination identity changed before publication",
+                        ));
+                    }
+                    rename_replace(
+                        &source,
+                        &staging.inner,
+                        state.payload_name.as_path(),
+                        parent,
+                        &state.destination,
+                    )?;
+                    state.destination_visible = true;
+                    state.source_moved = true;
+                    source.sync_all()?;
+                    let published = open_external_file(parent, &state.destination, false)?;
+                    if !source.same_file(&published)? {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "replaced export identity changed",
+                        ));
+                    }
                 }
             }
-            Some(expected) => {
-                let named_destination = open_external_file(parent, &self.destination, true)?;
-                if !expected.same_file(&named_destination)? {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "export destination identity changed before publication",
-                    ));
-                }
-                rename_replace(
-                    &source,
-                    &staging.inner,
-                    self.payload_name.as_path(),
-                    parent,
-                    &self.destination,
-                )?;
-                self.destination_visible = true;
-                self.source_moved = true;
-                source.sync_all()?;
-                let published = open_external_file(parent, &self.destination, false)?;
-                if !source.same_file(&published)? {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "replaced export identity changed",
-                    ));
-                }
-            }
+            parent.sync()?;
+            staging.sync()?;
         }
-        parent.sync()?;
-        staging.sync()?;
         self.remove_empty_staging()
     }
 
@@ -611,51 +816,132 @@ impl ExportTransaction {
 
     fn cleanup_owned_staging(&mut self) -> io::Result<()> {
         #[cfg(any(test, feature = "test-support"))]
-        if self.cleanup_failures_remaining != 0 {
-            self.cleanup_failures_remaining -= 1;
-            return Err(io::Error::other("injected export cleanup failure"));
+        {
+            self.state_mut().cleanup_diagnostic = None;
         }
-        drop(self.payload.take());
-        if self.source_moved {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.state().cleanup_failures_remaining != 0 {
+            self.state_mut().cleanup_failures_remaining -= 1;
+            return self.cleanup_failure(
+                ExportCleanupStage::InjectedBeforeCleanup,
+                io::Error::other("injected export cleanup failure"),
+            );
+        }
+        drop(self.state_mut().payload.take());
+        if self.state().source_moved {
             return self.remove_empty_staging();
         }
-        let Some(staging) = self.staging.as_ref() else {
+        if self.state().staging.is_none() {
             return Ok(());
-        };
-        match staging.open_file_nofollow(&self.payload_name) {
-            Ok(expected) => {
-                staging.remove_opened_file_if_matches(&expected, &self.payload_name)?;
+        }
+        let payload_cleanup = {
+            let state = self.state();
+            let staging = state
+                .staging
+                .as_ref()
+                .expect("checked export staging remains available");
+            match staging.open_file_nofollow(&state.payload_name) {
+                Ok(expected) => {
+                    if let Err(failure) = staging.remove_opened_file_if_matches_unsynced_observed(
+                        &expected,
+                        &state.payload_name,
+                    ) {
+                        let stage = match failure.stage {
+                            ExactFileRemovalStage::NamedOpen => {
+                                ExportCleanupStage::PayloadNamedOpen
+                            }
+                            ExactFileRemovalStage::Identity => ExportCleanupStage::PayloadIdentity,
+                            #[cfg(windows)]
+                            ExactFileRemovalStage::CleanupOpen => {
+                                ExportCleanupStage::PayloadCleanupOpen
+                            }
+                            ExactFileRemovalStage::Disposition => {
+                                ExportCleanupStage::PayloadDisposition
+                            }
+                            ExactFileRemovalStage::Absence => ExportCleanupStage::PayloadAbsence,
+                        };
+                        Err((stage, failure.error))
+                    } else if let Err(error) = staging.sync() {
+                        Err((ExportCleanupStage::StagingSync, error))
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err((ExportCleanupStage::PayloadNamedOpen, error)),
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        };
+        if let Err((stage, error)) = payload_cleanup {
+            return self.cleanup_failure(stage, error);
         }
         self.remove_empty_staging()
     }
 
     fn remove_empty_staging(&mut self) -> io::Result<()> {
-        let Some(staging) = self.staging.take() else {
+        let Some(staging) = self.state_mut().staging.take() else {
             return Ok(());
         };
-        staging.sync()?;
-        drop(staging);
-        let parent = self
-            .parent
-            .as_ref()
-            .ok_or_else(|| io::Error::other("export transaction is closed"))?;
-        parent.remove_empty_dir(&self.staging_name)
+        #[cfg(any(test, feature = "test-support"))]
+        if self.state().final_staging_sync_failures_remaining != 0 {
+            self.state_mut().final_staging_sync_failures_remaining -= 1;
+            self.state_mut().staging = Some(staging);
+            return self.cleanup_failure(
+                ExportCleanupStage::StagingSync,
+                io::Error::other("injected final export staging sync failure"),
+            );
+        }
+        if let Err(error) = staging.sync() {
+            self.state_mut().staging = Some(staging);
+            return self.cleanup_failure(ExportCleanupStage::StagingSync, error);
+        }
+        let directory_cleanup = {
+            let state = self.state();
+            match state.parent.as_ref() {
+                Some(parent) => {
+                    parent.remove_empty_dir_if_matches_observed(&staging, &state.staging_name)
+                }
+                None => Err(super::ExactDirectoryRemovalFailure {
+                    stage: ExactDirectoryRemovalStage::Identity,
+                    error: io::Error::other("export transaction is closed"),
+                }),
+            }
+        };
+        match directory_cleanup {
+            Ok(()) => {
+                drop(staging);
+                Ok(())
+            }
+            Err(failure) => {
+                let stage = match failure.stage {
+                    #[cfg(windows)]
+                    ExactDirectoryRemovalStage::CleanupOpen => {
+                        ExportCleanupStage::StagingCleanupOpen
+                    }
+                    ExactDirectoryRemovalStage::Identity => ExportCleanupStage::StagingIdentity,
+                    ExactDirectoryRemovalStage::Disposition => {
+                        ExportCleanupStage::StagingDisposition
+                    }
+                    ExactDirectoryRemovalStage::Absence => ExportCleanupStage::StagingAbsence,
+                };
+                self.state_mut().staging = Some(staging);
+                self.cleanup_failure(stage, failure.error)
+            }
+        }
     }
 }
 
 impl Write for ExportTransaction {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.payload
+        self.state_mut()
+            .payload
             .as_mut()
             .ok_or_else(|| io::Error::other("export transaction is closed"))?
             .write(buffer)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.payload
+        self.state_mut()
+            .payload
             .as_mut()
             .ok_or_else(|| io::Error::other("export transaction is closed"))?
             .flush()
@@ -684,11 +970,7 @@ fn open_external_file(
     if for_replacement {
         options.write(true);
         #[cfg(windows)]
-        {
-            use cap_std::fs::OpenOptionsExt as _;
-            use windows_sys::Win32::Storage::FileSystem::{DELETE, GENERIC_READ, GENERIC_WRITE};
-            options.access_mode(GENERIC_READ | GENERIC_WRITE | DELETE);
-        }
+        configure_rename_file_open_options(&mut options);
     }
     let inner = directory.inner.open_with(name, &options)?;
     let file = FileCapability { inner };
@@ -704,7 +986,7 @@ fn create_random_private_staging(parent: &Directory) -> io::Result<(PhysicalComp
         let mut value = String::new();
         value
             .try_reserve_exact(".notecrypt-export-".len() + 32)
-            .map_err(|_| io::Error::other("staging-name allocation failed"))?;
+            .map_err(|_| allocation_error("staging-name allocation failed"))?;
         value.push_str(".notecrypt-export-");
         for byte in random {
             use fmt::Write as _;
@@ -737,6 +1019,34 @@ fn validate_external_path_bound(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn try_copy_external_component(name: &Path) -> io::Result<std::path::PathBuf> {
+    if !matches!(
+        (name.components().next(), name.components().nth(1)),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "external file name is not one normal component",
+        ));
+    }
+    let encoded_length = name.as_os_str().as_encoded_bytes().len();
+    if encoded_length == 0
+        || encoded_length > MAX_EXTERNAL_PATH_BYTES
+        || name.as_os_str().as_encoded_bytes().contains(&0)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid or oversized external file name",
+        ));
+    }
+    let mut retained = std::path::PathBuf::new();
+    retained
+        .try_reserve_exact(encoded_length)
+        .map_err(|_| allocation_error("external file name allocation failed"))?;
+    retained.push(name);
+    Ok(retained)
+}
+
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
@@ -764,7 +1074,7 @@ mod tests {
             .write_all(b"complete private plaintext")
             .unwrap();
         std::fs::write(&destination, b"raced existing").unwrap();
-        transaction.cleanup_failures_remaining = 1;
+        transaction.state_mut().cleanup_failures_remaining = 1;
 
         let error = transaction.publish().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
@@ -792,7 +1102,7 @@ mod tests {
             )
             .unwrap();
         transaction.write_all(b"private plaintext").unwrap();
-        transaction.cleanup_failures_remaining = 2;
+        transaction.state_mut().cleanup_failures_remaining = 2;
 
         let pending = transaction.abort().unwrap_err();
         let pending = pending.retry().unwrap_err();
@@ -819,8 +1129,8 @@ mod tests {
             )
             .unwrap();
         transaction.write_all(b"private plaintext").unwrap();
-        transaction.panic_on_publish = true;
-        transaction.cleanup_failures_remaining = 1;
+        transaction.state_mut().panic_on_publish = true;
+        transaction.state_mut().cleanup_failures_remaining = 1;
 
         let error = transaction.publish().unwrap_err();
         assert!(!error.published());
@@ -830,12 +1140,24 @@ mod tests {
     }
 }
 
-fn validate_stable_import(file: &FileCapability, initial: FileStamp) -> io::Result<()> {
+fn validate_stable_import(
+    file: &FileCapability,
+    initial: FileStamp,
+    parent: &Directory,
+    name: &Path,
+) -> io::Result<()> {
     file.require_single_regular_link()?;
     if file.stamp()? != initial {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "selected import changed while it was read",
+        ));
+    }
+    let named = parent.open_file_nofollow_path(name)?;
+    if !file.same_file(&named)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "selected import name changed while it was read",
         ));
     }
     Ok(())

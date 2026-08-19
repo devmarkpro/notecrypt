@@ -1306,7 +1306,7 @@ impl ReplicationLease for QuarantineLease<'_> {
             return Err(self.fail(StoreError::LimitExceeded));
         }
         let file_name = component(&encode_hex(expected_id.as_bytes()))?;
-        let file = match self.operation.create_file_new(&file_name) {
+        let file = match self.operation.create_private_file_new(&file_name) {
             Ok(file) => file,
             Err(primary) => {
                 return Err(self.fail(StoreError::Io(primary)));
@@ -3336,7 +3336,7 @@ mod tests {
             .create_private_dir(&stale_name)
             .unwrap();
         stale
-            .create_file_new(&component("ciphertext").unwrap())
+            .create_private_file_new(&component("ciphertext").unwrap())
             .unwrap()
             .write_all(b"stale")
             .unwrap();

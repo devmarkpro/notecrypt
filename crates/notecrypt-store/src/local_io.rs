@@ -202,7 +202,7 @@ fn create_temporary(
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random).map_err(|_| StoreError::RandomSource)?;
         let name = component(&encode_hex(&random))?;
-        match directory.create_file_new(&name) {
+        match directory.create_private_file_new(&name) {
             Ok(file) => return Ok((name, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(StoreError::from(error)),
@@ -228,7 +228,7 @@ mod tests {
             .create_private_dir(&component("records").unwrap())
             .unwrap();
         let name = component("record").unwrap();
-        let mut original = records.create_file_new(&name).unwrap();
+        let mut original = records.create_private_file_new(&name).unwrap();
         original.write_all(b"old").unwrap();
         original.sync_all().unwrap();
         records.sync().unwrap();

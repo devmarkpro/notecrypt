@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -6,12 +6,13 @@ use std::time::{Duration, Instant};
 use notecrypt_core::VaultId;
 use notecrypt_service::{
     Command, Control, DeviceKeyReference, DeviceUnlockSecret, EditorLaunchRequest, EditorProcess,
-    EditorSupervisor, HostPortError, LocalVaultLease, MaterializationTarget, MonotonicClock,
-    OperationContext, OperationExecutor, OperationResult, PublishedGeneration, RecoverySecretInput,
-    ReplicationLimitProfile, ReplicationVaultLease, RepositoryPortError, ServiceConfig,
-    ServiceError, ServiceHandle, SessionComponents, SessionPolicy, SessionState,
-    StartupCleanupReport, TargetWorkspaceRequest, TrustedActivityHandle, UnlockedVaultCapability,
-    VaultRepository, VaultWorkspaceRequest, WorkspaceLease, WorkspaceProvider, WorkspaceWatch,
+    EditorQuiescence, EditorSupervisor, HostPortError, LocalVaultLease, MaterializationPublication,
+    MaterializationTarget, MonotonicClock, OperationContext, OperationExecutor, OperationResult,
+    PublishedGeneration, RecoverySecretInput, ReplicationLimitProfile, ReplicationVaultLease,
+    RepositoryPortError, ServiceConfig, ServiceError, ServiceHandle, SessionComponents,
+    SessionPolicy, SessionState, StartupCleanupReport, TargetWorkspaceRequest,
+    TrustedActivityHandle, UnlockedVaultCapability, VaultRepository, VaultWorkspaceRequest,
+    WorkspaceLease, WorkspaceProvider, WorkspaceWatch,
 };
 
 const SHORT_WAIT: Duration = Duration::from_secs(5);
@@ -165,6 +166,10 @@ impl WorkspaceProvider for FakeWorkspaceProvider {
         Err(HostPortError::Unavailable)
     }
 
+    fn confirm_activated(&self, _lease: &WorkspaceLease) -> Result<(), HostPortError> {
+        Ok(())
+    }
+
     fn materialization_target(
         &self,
         _lease: &WorkspaceLease,
@@ -177,14 +182,14 @@ impl WorkspaceProvider for FakeWorkspaceProvider {
         &self,
         _lease: &WorkspaceLease,
         _target: MaterializationTarget,
-    ) -> Result<PublishedGeneration, HostPortError> {
+    ) -> Result<MaterializationPublication, HostPortError> {
         Err(HostPortError::Unavailable)
     }
 
     fn arm_published_path(
         &self,
         _lease: &WorkspaceLease,
-        _published: PublishedGeneration,
+        _published: &mut PublishedGeneration,
     ) -> Result<(), HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -212,7 +217,7 @@ impl WorkspaceProvider for FakeWorkspaceProvider {
 
     fn remove_workspace(
         &self,
-        _lease: WorkspaceLease,
+        _lease: &WorkspaceLease,
     ) -> Result<Box<dyn notecrypt_service::WorkspaceAbsenceGuard>, HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -231,6 +236,7 @@ struct CapabilityState {
     close: usize,
     local_leases: usize,
     cancellation_calls: usize,
+    close_observed: Option<mpsc::Sender<()>>,
     registration_block: Option<Arc<RegistrationBlock>>,
     cancellation_block: Option<Arc<RegistrationBlock>>,
     revocation_handle_panics: bool,
@@ -505,10 +511,23 @@ impl UnlockedVaultCapability for FakeUnlocked {
         Err(RepositoryPortError::Unavailable)
     }
 
-    fn register_workspace(
+    fn prepare_workspace_registration(
         &self,
-    ) -> Result<Box<dyn notecrypt_service::RegisteredWorkspaceCapability>, RepositoryPortError>
-    {
+    ) -> Result<Box<dyn notecrypt_service::PreparedWorkspaceUnregister>, RepositoryPortError> {
+        Err(RepositoryPortError::Unavailable)
+    }
+
+    fn commit_workspace_registration(
+        &self,
+        _registration: &mut dyn notecrypt_service::PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
+        Err(RepositoryPortError::Unavailable)
+    }
+
+    fn activate_prepared_workspace_registration(
+        &self,
+        _registration: &mut dyn notecrypt_service::PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
         Err(RepositoryPortError::Unavailable)
     }
 
@@ -537,16 +556,15 @@ impl UnlockedVaultCapability for FakeUnlocked {
         Err(RepositoryPortError::Unavailable)
     }
 
-    fn unregister_removed_workspace(
-        &self,
-        _active: &mut dyn notecrypt_service::ActiveWorkspaceCapability,
-        _guard: Box<dyn notecrypt_service::WorkspaceAbsenceGuard>,
-    ) -> Result<(), RepositoryPortError> {
-        Err(RepositoryPortError::Unavailable)
-    }
-
     fn close(self: Box<Self>) -> Result<(), RepositoryPortError> {
-        self.0.lock().unwrap().close += 1;
+        let close_observed = {
+            let mut state = self.0.lock().unwrap();
+            state.close += 1;
+            state.close_observed.take()
+        };
+        if let Some(close_observed) = close_observed {
+            close_observed.send(()).unwrap();
+        }
         Ok(())
     }
 }
@@ -597,6 +615,87 @@ impl OperationExecutor for NoopExecutor {
         _context: &OperationContext,
     ) -> Result<OperationResult, ServiceError> {
         Err(ServiceError::ExecutorFailed)
+    }
+}
+
+struct FakeEditorSupervisor {
+    active: AtomicBool,
+    force_clears: bool,
+    poll_failures: AtomicUsize,
+    poll_panics: AtomicUsize,
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl FakeEditorSupervisor {
+    fn new(force_clears: bool) -> Self {
+        Self {
+            active: AtomicBool::new(true),
+            force_clears,
+            poll_failures: AtomicUsize::new(0),
+            poll_panics: AtomicUsize::new(0),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn fail_polls(&self, count: usize) {
+        self.poll_failures.store(count, Ordering::Release);
+    }
+
+    fn panic_polls(&self, count: usize) {
+        self.poll_panics.store(count, Ordering::Release);
+    }
+
+    fn release_naturally(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+impl EditorSupervisor for FakeEditorSupervisor {
+    fn launch(
+        &self,
+        _request: EditorLaunchRequest,
+    ) -> Result<Box<dyn EditorProcess>, HostPortError> {
+        Err(HostPortError::Unavailable)
+    }
+
+    fn request_stop_all(&self) -> Result<(), HostPortError> {
+        self.calls.lock().unwrap().push("request");
+        Ok(())
+    }
+
+    fn poll_quiescence(&self) -> Result<EditorQuiescence, HostPortError> {
+        self.calls.lock().unwrap().push("poll");
+        if self
+            .poll_panics
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                (remaining != 0).then(|| remaining - 1)
+            })
+            .is_ok()
+        {
+            panic!("injected editor poll panic");
+        }
+        if self
+            .poll_failures
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                (remaining != 0).then(|| remaining - 1)
+            })
+            .is_ok()
+        {
+            return Err(HostPortError::PlatformFailure);
+        }
+        Ok(if self.active.load(Ordering::Acquire) {
+            EditorQuiescence::new(1, 1)
+        } else {
+            EditorQuiescence::new(0, 0)
+        })
+    }
+
+    fn force_stop_all(&self) -> Result<(), HostPortError> {
+        self.calls.lock().unwrap().push("force");
+        if self.force_clears {
+            self.active.store(false, Ordering::Release);
+        }
+        Ok(())
     }
 }
 
@@ -903,6 +1002,35 @@ fn runtime_with_clock(clock: Arc<dyn MonotonicClock>) -> (ServiceHandle, Trusted
     .unwrap()
 }
 
+fn runtime_with_editor(
+    editor: Arc<dyn EditorSupervisor>,
+) -> (ServiceHandle, Arc<FakeWorkspaceProvider>) {
+    let clock = Arc::new(FakeClock::new());
+    let workspace = Arc::new(FakeWorkspaceProvider::new(false));
+    let capability = Arc::new(Mutex::new(CapabilityState::default()));
+    let repository = Arc::new(FakeRepository {
+        result: RepositoryPortError::Unavailable,
+        capability,
+    });
+    let policy = SessionPolicy::try_new(
+        Duration::from_secs(10),
+        Duration::from_secs(30),
+        vec![],
+        Duration::ZERO,
+    )
+    .unwrap();
+    let components = SessionComponents::new(repository, workspace.clone(), clock, policy)
+        .with_editor_supervisor(editor);
+    let (service, _) = ServiceHandle::with_session_components(
+        ServiceConfig::default(),
+        Arc::new(NoopExecutor),
+        Arc::new(notecrypt_service::OsOperationIdRandom),
+        components,
+    )
+    .unwrap();
+    (service, workspace)
+}
+
 fn wait_for_state(service: &ServiceHandle, expected: SessionState) {
     let deadline = std::time::Instant::now() + SHORT_WAIT;
     while service.snapshot().session_state() != expected {
@@ -973,6 +1101,85 @@ fn cleanup_runs_before_unlock_and_failure_exposes_no_capability() {
         SessionState::CleanupRequired
     );
     assert_eq!(capability.lock().unwrap().local_leases, 0);
+}
+
+#[test]
+fn lock_force_stops_and_reaps_editors_before_workspace_cleanup() {
+    let editor = Arc::new(FakeEditorSupervisor::new(true));
+    let (service, workspace) = runtime_with_editor(editor.clone());
+    service.unlock_with_recovery(secret()).unwrap();
+    assert_eq!(workspace.calls(), 1);
+
+    service.control(Control::LockNow).unwrap();
+    wait_for_state(&service, SessionState::Locked);
+
+    assert_eq!(workspace.calls(), 2);
+    let calls = editor.calls.lock().unwrap();
+    assert_eq!(calls.first(), Some(&"request"));
+    assert!(calls.contains(&"force"));
+    assert_eq!(calls.last(), Some(&"poll"));
+}
+
+#[test]
+fn unresolved_editor_blocks_cleanup_until_retry_proves_natural_exit() {
+    let editor = Arc::new(FakeEditorSupervisor::new(false));
+    let (service, workspace) = runtime_with_editor(editor.clone());
+    service.unlock_with_recovery(secret()).unwrap();
+
+    service.control(Control::LockNow).unwrap();
+    wait_for_state(&service, SessionState::CleanupRequired);
+    assert_eq!(workspace.calls(), 1);
+
+    editor.release_naturally();
+    service.retry_cleanup().unwrap();
+    assert_eq!(service.snapshot().session_state(), SessionState::Locked);
+    assert_eq!(workspace.calls(), 2);
+}
+
+#[test]
+fn transient_editor_poll_failure_is_retried_before_cleanup() {
+    let editor = Arc::new(FakeEditorSupervisor::new(true));
+    editor.fail_polls(1);
+    let (service, workspace) = runtime_with_editor(editor);
+    service.unlock_with_recovery(secret()).unwrap();
+
+    service.control(Control::LockNow).unwrap();
+    wait_for_state(&service, SessionState::Locked);
+
+    assert_eq!(workspace.calls(), 2);
+}
+
+#[test]
+fn repeated_editor_poll_failures_retain_cleanup_authority_until_retry() {
+    let editor = Arc::new(FakeEditorSupervisor::new(true));
+    editor.fail_polls(usize::MAX);
+    let (service, workspace) = runtime_with_editor(editor.clone());
+    service.unlock_with_recovery(secret()).unwrap();
+
+    service.control(Control::LockNow).unwrap();
+    wait_for_state(&service, SessionState::CleanupRequired);
+    assert_eq!(workspace.calls(), 1);
+
+    editor.fail_polls(0);
+    service.retry_cleanup().unwrap();
+    assert_eq!(service.snapshot().session_state(), SessionState::Locked);
+    assert_eq!(workspace.calls(), 2);
+}
+
+#[test]
+fn editor_poll_panic_fails_one_lock_attempt_and_recovered_retry_cleans() {
+    let editor = Arc::new(FakeEditorSupervisor::new(true));
+    editor.panic_polls(1);
+    let (service, workspace) = runtime_with_editor(editor);
+    service.unlock_with_recovery(secret()).unwrap();
+
+    service.control(Control::LockNow).unwrap();
+    wait_for_state(&service, SessionState::CleanupRequired);
+    assert_eq!(workspace.calls(), 1);
+
+    service.retry_cleanup().unwrap();
+    assert_eq!(service.snapshot().session_state(), SessionState::Locked);
+    assert_eq!(workspace.calls(), 2);
 }
 
 #[test]
@@ -1638,14 +1845,19 @@ fn blocked_clock_and_cancellation_callback_cannot_delay_post_grace_revocation() 
     ));
     let cancellation_gate = Arc::new(TestGate::default());
     let (cancellation_entered_tx, cancellation_entered_rx) = mpsc::channel();
+    let (close_observed_tx, close_observed_rx) = mpsc::channel();
     let executor_gate = Arc::new(TestGate::default());
     let (executor_entered_tx, executor_entered_rx) = mpsc::channel();
     let workspace = Arc::new(FakeWorkspaceProvider::new(false));
     let capability = Arc::new(Mutex::new(CapabilityState::default()));
-    capability.lock().unwrap().cancellation_block = Some(Arc::new(RegistrationBlock {
-        entered: cancellation_entered_tx,
-        gate: Arc::clone(&cancellation_gate),
-    }));
+    {
+        let mut state = capability.lock().unwrap();
+        state.cancellation_block = Some(Arc::new(RegistrationBlock {
+            entered: cancellation_entered_tx,
+            gate: Arc::clone(&cancellation_gate),
+        }));
+        state.close_observed = Some(close_observed_tx);
+    }
     let repository = Arc::new(FakeRepository {
         result: RepositoryPortError::Unavailable,
         capability: Arc::clone(&capability),
@@ -1681,7 +1893,21 @@ fn blocked_clock_and_cancellation_callback_cannot_delay_post_grace_revocation() 
     });
     clock_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
     service.control(Control::LockNow).unwrap();
-    cancellation_entered_rx.recv_timeout(SHORT_WAIT).unwrap();
+    let observation_deadline = Instant::now() + SHORT_WAIT;
+    cancellation_entered_rx
+        .recv_timeout(
+            observation_deadline
+                .checked_duration_since(Instant::now())
+                .expect("cancellation callback exceeded the observation deadline"),
+        )
+        .unwrap();
+    close_observed_rx
+        .recv_timeout(
+            observation_deadline
+                .checked_duration_since(Instant::now())
+                .expect("capability close exceeded the observation deadline"),
+        )
+        .unwrap();
     let state = capability.lock().unwrap();
     assert_eq!(state.begin_close, 1);
     assert_eq!(state.close, 1);

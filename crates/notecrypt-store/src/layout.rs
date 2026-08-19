@@ -12,6 +12,7 @@ pub(crate) struct StoreLayout {
     pub(crate) trusted: Directory,
     pub(crate) trusted_remote: Directory,
     pub(crate) cleanup_registry: Directory,
+    pub(crate) cleanup_staging: Directory,
     pub(crate) device_slots: Directory,
     pub(crate) quarantine: Directory,
 }
@@ -31,6 +32,7 @@ impl StoreLayout {
         let trusted = child(&vault_local, "trusted", true)?;
         let trusted_remote = child(&vault_local, "trusted-remote", true)?;
         let cleanup_registry = child(&vault_local, "cleanup-registry", true)?;
+        let cleanup_staging = child(&vault_local, "cleanup-staging", true)?;
         let device_slots = child(&vault_local, "device-slots", true)?;
         let quarantine = child(&vault_local, "replication-quarantine", true)?;
         require_capabilities(&journal)?;
@@ -43,6 +45,7 @@ impl StoreLayout {
             trusted,
             trusted_remote,
             cleanup_registry,
+            cleanup_staging,
             device_slots,
             quarantine,
         })
@@ -62,6 +65,7 @@ impl StoreLayout {
         let trusted = existing_child(&vault_local, "trusted", true)?;
         let trusted_remote = existing_child(&vault_local, "trusted-remote", true)?;
         let cleanup_registry = existing_child(&vault_local, "cleanup-registry", true)?;
+        let cleanup_staging = existing_child(&vault_local, "cleanup-staging", true)?;
         let device_slots = existing_child(&vault_local, "device-slots", true)?;
         let quarantine = existing_child(&vault_local, "replication-quarantine", true)?;
         require_capabilities(&journal)?;
@@ -74,6 +78,7 @@ impl StoreLayout {
             trusted,
             trusted_remote,
             cleanup_registry,
+            cleanup_staging,
             device_slots,
             quarantine,
         })

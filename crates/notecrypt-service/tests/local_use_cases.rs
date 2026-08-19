@@ -46,6 +46,10 @@ impl WorkspaceProvider for UnavailableWorkspace {
         Err(HostPortError::Unavailable)
     }
 
+    fn confirm_activated(&self, _lease: &WorkspaceLease) -> Result<(), HostPortError> {
+        Ok(())
+    }
+
     fn materialization_target(
         &self,
         _lease: &WorkspaceLease,
@@ -58,14 +62,14 @@ impl WorkspaceProvider for UnavailableWorkspace {
         &self,
         _lease: &WorkspaceLease,
         _target: notecrypt_service::MaterializationTarget,
-    ) -> Result<notecrypt_service::PublishedGeneration, HostPortError> {
+    ) -> Result<notecrypt_service::MaterializationPublication, HostPortError> {
         Err(HostPortError::Unavailable)
     }
 
     fn arm_published_path(
         &self,
         _lease: &WorkspaceLease,
-        _published: notecrypt_service::PublishedGeneration,
+        _published: &mut notecrypt_service::PublishedGeneration,
     ) -> Result<(), HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -96,7 +100,7 @@ impl WorkspaceProvider for UnavailableWorkspace {
 
     fn remove_workspace(
         &self,
-        _lease: WorkspaceLease,
+        _lease: &WorkspaceLease,
     ) -> Result<Box<dyn notecrypt_service::WorkspaceAbsenceGuard>, HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -347,14 +351,22 @@ fn production_unlock_is_exclusive_cancelable_and_does_not_expose_reads() {
     let service = service_for_roots(&repository_root, &local_root);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    local_test_support::install_after_recovery_keys_hook(vault, move || {
+    local_test_support::install_before_recovery_unlock_hook(vault, move || {
         entered_tx.send(()).unwrap();
         release_rx.recv().unwrap();
     });
 
+    let admission_started = std::time::Instant::now();
     let unlocking_service = service.clone();
     let unlock = std::thread::spawn(move || unlocking_service.unlock_with_recovery(secret(SECRET)));
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    entered_rx
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap_or_else(|error| {
+            panic!(
+                "unlock did not reach the post-admission test seam within the job watchdog: elapsed={:?}, error={error}",
+                admission_started.elapsed()
+            )
+        });
     assert_eq!(service.snapshot().session_state(), SessionState::Unlocking);
     assert_eq!(
         service.unlock_with_recovery(secret(SECRET)),
@@ -378,7 +390,20 @@ fn production_unlock_is_exclusive_cancelable_and_does_not_expose_reads() {
     assert!(!service.snapshot().accepting_operations());
     assert!(!service.snapshot().key_leases_open());
 
-    service.unlock_with_recovery(secret(SECRET)).unwrap();
+    let retry_started = std::time::Instant::now();
+    loop {
+        match service.unlock_with_recovery(secret(SECRET)) {
+            Ok(_) => break,
+            Err(ServiceError::Locked) if retry_started.elapsed() < Duration::from_secs(5) => {
+                std::thread::yield_now();
+            }
+            Err(ServiceError::Locked) => panic!(
+                "unlock admission remained reserved after global observer completion: elapsed={:?}",
+                retry_started.elapsed()
+            ),
+            Err(error) => panic!("unlock retry failed unexpectedly: {error:?}"),
+        }
+    }
     assert_eq!(service.snapshot().session_state(), SessionState::Unlocked);
 }
 

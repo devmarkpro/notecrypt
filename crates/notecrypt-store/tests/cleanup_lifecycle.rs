@@ -180,6 +180,60 @@ fn collisions_retry_and_exhaustion_never_replace_existing_records() {
 }
 
 #[test]
+fn prepared_registration_collision_cancels_without_deleting_the_foreign_record() {
+    let collision = [0x67; 16];
+    let mut registry = registry(
+        8,
+        [
+            CleanupRandomStep::Bytes(collision),
+            CleanupRandomStep::Bytes(collision),
+        ],
+    );
+    let original = registry.reserve_and_register().unwrap();
+    let mut prepared = registry.prepare_registration().unwrap();
+
+    assert!(matches!(
+        registry.commit_prepared_registration(&mut prepared),
+        Err(StoreError::IdentityCollision)
+    ));
+    registry
+        .cancel_prepared_registration(&mut prepared)
+        .unwrap();
+
+    assert_eq!(registry.persisted_record_count(), 1);
+    assert_eq!(
+        registry.enumerate_authenticated().unwrap()[0]
+            .workspace_id()
+            .child_name(),
+        original.workspace_id().child_name()
+    );
+    assert!(matches!(
+        registry.cancel_prepared_registration(&mut prepared),
+        Err(StoreError::InvalidCapability)
+    ));
+}
+
+#[test]
+fn prepared_registration_rechecks_capacity_at_commit() {
+    let mut registry = registry(
+        1,
+        [
+            CleanupRandomStep::Bytes([0x68; 16]),
+            CleanupRandomStep::Bytes([0x69; 16]),
+        ],
+    );
+    let mut first = registry.prepare_registration().unwrap();
+    let mut second = registry.prepare_registration().unwrap();
+
+    registry.commit_prepared_registration(&mut first).unwrap();
+    assert!(matches!(
+        registry.commit_prepared_registration(&mut second),
+        Err(StoreError::LimitExceeded)
+    ));
+    assert_eq!(registry.persisted_record_count(), 1);
+}
+
+#[test]
 fn partial_rng_failure_is_atomic_and_does_not_use_partial_identity() {
     let mut registry = registry(
         8,

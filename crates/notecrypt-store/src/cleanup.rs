@@ -39,7 +39,7 @@ impl CleanupWorkspaceId {
         Self(bytes)
     }
 
-    fn as_bytes(&self) -> &[u8; 16] {
+    pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
 }
@@ -70,6 +70,48 @@ pub struct ActiveWorkspace {
     binding: TokenBinding,
     active: bool,
     removal_pending: bool,
+}
+
+/// Linear exact-record authority prepared while the vault generation is authenticated.
+pub(crate) struct PreparedWorkspaceUnregister {
+    binding: TokenBinding,
+    canonical: Vec<u8>,
+    active: bool,
+    removal_pending: bool,
+    authority: Arc<WorkspaceAbsenceAuthorityInner>,
+}
+
+pub(crate) struct PreparedWorkspaceRegistration {
+    registered: TokenBinding,
+    registered_canonical: Vec<u8>,
+    active: TokenBinding,
+    active_canonical: Vec<u8>,
+    stage: RegistrationStage,
+    removal_pending: bool,
+    authority: Arc<WorkspaceAbsenceAuthorityInner>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegistrationStage {
+    Pending,
+    Creating,
+    Registered,
+    ActivationPending,
+    Active,
+    NoOwnedRecord,
+    Complete,
+}
+
+impl PreparedWorkspaceRegistration {
+    pub(crate) const fn workspace_id(&self) -> &CleanupWorkspaceId {
+        &self.registered.workspace_id
+    }
+}
+
+impl PreparedWorkspaceUnregister {
+    pub(crate) const fn workspace_id(&self) -> &CleanupWorkspaceId {
+        &self.binding.workspace_id
+    }
 }
 
 impl ActiveWorkspace {
@@ -123,6 +165,69 @@ impl WorkspaceAbsenceAuthority {
             active: true,
             _guard: guard,
         })
+    }
+
+    pub(crate) fn acquire_prepared(
+        &self,
+        prepared: &PreparedWorkspaceUnregister,
+    ) -> Result<WorkspaceAbsenceProof, StoreError> {
+        if !prepared.active || !Arc::ptr_eq(&prepared.authority, &self.inner) {
+            return Err(StoreError::InvalidCapability);
+        }
+        let binding = &prepared.binding;
+        let guard = self
+            .inner
+            .verifier
+            .acquire_verified_absence(&binding.workspace_id)?;
+        Ok(WorkspaceAbsenceProof {
+            authority: Arc::clone(&self.inner),
+            workspace_id: *binding.workspace_id.as_bytes(),
+            vault: binding.vault,
+            generation: binding.generation,
+            record_id: binding.record_id,
+            record_commitment: binding.record_commitment,
+            active: true,
+            _guard: guard,
+        })
+    }
+
+    pub(crate) fn acquire_registration(
+        &self,
+        registration: &PreparedWorkspaceRegistration,
+        active: bool,
+    ) -> Result<WorkspaceAbsenceProof, StoreError> {
+        if matches!(
+            registration.stage,
+            RegistrationStage::NoOwnedRecord | RegistrationStage::Complete
+        ) || !Arc::ptr_eq(&registration.authority, &self.inner)
+        {
+            return Err(StoreError::InvalidCapability);
+        }
+        let binding = if active {
+            &registration.active
+        } else {
+            &registration.registered
+        };
+        let guard = self
+            .inner
+            .verifier
+            .acquire_verified_absence(&binding.workspace_id)?;
+        Ok(WorkspaceAbsenceProof {
+            authority: Arc::clone(&self.inner),
+            workspace_id: *binding.workspace_id.as_bytes(),
+            vault: binding.vault,
+            generation: binding.generation,
+            record_id: binding.record_id,
+            record_commitment: binding.record_commitment,
+            active: true,
+            _guard: guard,
+        })
+    }
+
+    pub(crate) fn clone_bound(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
     }
 }
 
@@ -201,10 +306,14 @@ pub(crate) type CleanupRecordVisitor<'a> =
     dyn FnMut([u8; 32], &[u8]) -> Result<(), StoreError> + 'a;
 
 pub(crate) trait CleanupRecordPersistence {
+    fn cleanup_staging_bounded(&mut self, maximum_records: usize) -> Result<(), StoreError>;
+
+    fn record_count_bounded(&mut self, maximum_records: usize) -> Result<usize, StoreError>;
+
     fn create_if_absent(
         &mut self,
         record_id: [u8; 32],
-        canonical_record: Vec<u8>,
+        canonical_record: &[u8],
     ) -> Result<CreateRecordOutcome, StoreError>;
 
     fn read_bounded(
@@ -217,7 +326,7 @@ pub(crate) trait CleanupRecordPersistence {
         &mut self,
         record_id: &[u8; 32],
         expected: &[u8],
-        replacement: Vec<u8>,
+        replacement: &[u8],
     ) -> Result<DurableMutationOutcome, StoreError>;
 
     fn remove_if_exact(
@@ -227,6 +336,8 @@ pub(crate) trait CleanupRecordPersistence {
     ) -> Result<DurableMutationOutcome, StoreError>;
 
     fn sync_directory(&mut self) -> Result<(), StoreError>;
+
+    fn sync_registration_source_directory(&mut self) -> Result<(), StoreError>;
 
     fn visit_bounded(
         &mut self,
@@ -330,7 +441,11 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
         &mut self,
         key: &dyn CleanupAuthenticator,
     ) -> Result<RegisteredWorkspace, StoreError> {
-        if self.authenticated_records(key)?.len() >= self.maximum_records {
+        if self
+            .persistence
+            .record_count_bounded(self.maximum_records)?
+            >= self.maximum_records
+        {
             return Err(StoreError::LimitExceeded);
         }
         for _ in 0..ID_RETRIES {
@@ -347,10 +462,7 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
             );
             let record_id = inner.record_id();
             let canonical = encode_authenticated_record(&inner, key)?;
-            match self
-                .persistence
-                .create_if_absent(record_id, canonical.clone())?
-            {
+            match self.persistence.create_if_absent(record_id, &canonical)? {
                 CreateRecordOutcome::Created => {
                     return Ok(RegisteredWorkspace {
                         binding: token_binding(&inner, &canonical),
@@ -362,6 +474,343 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
             }
         }
         Err(StoreError::IdentityCollision)
+    }
+
+    pub(crate) fn prepare_registration(
+        &mut self,
+        key: &dyn CleanupAuthenticator,
+        authority: &WorkspaceAbsenceAuthority,
+    ) -> Result<PreparedWorkspaceRegistration, StoreError> {
+        if self
+            .persistence
+            .record_count_bounded(self.maximum_records)?
+            >= self.maximum_records
+        {
+            return Err(StoreError::LimitExceeded);
+        }
+        let mut bytes = [0_u8; 16];
+        self.random
+            .fill(&mut bytes)
+            .map_err(|_| StoreError::RandomSource)?;
+        let workspace_id = CleanupWorkspaceId::from_csprng(bytes);
+        let registered_record = CleanupRecord::new(
+            self.vault,
+            workspace_id.as_bytes(),
+            self.generation,
+            CleanupWorkspaceState::Registered,
+        );
+        let registered_canonical = encode_authenticated_record(&registered_record, key)?;
+        let active_record = CleanupRecord::new(
+            self.vault,
+            workspace_id.as_bytes(),
+            self.generation,
+            CleanupWorkspaceState::Active,
+        );
+        let active_canonical = encode_authenticated_record(&active_record, key)?;
+        Ok(PreparedWorkspaceRegistration {
+            registered: token_binding(&registered_record, &registered_canonical),
+            registered_canonical,
+            active: token_binding(&active_record, &active_canonical),
+            active_canonical,
+            stage: RegistrationStage::Pending,
+            removal_pending: false,
+            authority: Arc::clone(&authority.inner),
+        })
+    }
+
+    pub(crate) fn commit_registration(
+        &mut self,
+        registration: &mut PreparedWorkspaceRegistration,
+    ) -> Result<(), StoreError> {
+        self.validate_registration_lineage(registration)?;
+        match registration.stage {
+            RegistrationStage::Registered
+            | RegistrationStage::ActivationPending
+            | RegistrationStage::Active => return Ok(()),
+            RegistrationStage::NoOwnedRecord => return Err(StoreError::IdentityCollision),
+            RegistrationStage::Complete => return Err(StoreError::InvalidCapability),
+            RegistrationStage::Creating => {
+                match self.persistence.read_bounded(
+                    &registration.registered.record_id,
+                    phase_one_local_record_limit()?,
+                )? {
+                    None => registration.stage = RegistrationStage::Pending,
+                    Some(current) if current == registration.registered_canonical => {
+                        self.persistence.sync_registration_source_directory()?;
+                        self.persistence.sync_directory()?;
+                        registration.stage = RegistrationStage::Registered;
+                        return Ok(());
+                    }
+                    Some(_) => {
+                        registration.stage = RegistrationStage::NoOwnedRecord;
+                        return Err(StoreError::IdentityCollision);
+                    }
+                }
+            }
+            RegistrationStage::Pending => {}
+        }
+        self.persistence
+            .cleanup_staging_bounded(self.maximum_records)?;
+        if self
+            .persistence
+            .record_count_bounded(self.maximum_records)?
+            >= self.maximum_records
+        {
+            return Err(StoreError::LimitExceeded);
+        }
+        registration.stage = RegistrationStage::Creating;
+        match self.persistence.create_if_absent(
+            registration.registered.record_id,
+            &registration.registered_canonical,
+        ) {
+            Ok(CreateRecordOutcome::Created) => {
+                registration.stage = RegistrationStage::Registered;
+                Ok(())
+            }
+            Ok(CreateRecordOutcome::AlreadyExists) => {
+                registration.stage = RegistrationStage::NoOwnedRecord;
+                Err(StoreError::IdentityCollision)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn validate_registration_lineage(
+        &self,
+        registration: &PreparedWorkspaceRegistration,
+    ) -> Result<(), StoreError> {
+        self.validate_token(&registration.registered)?;
+        self.validate_token(&registration.active)?;
+        if registration.registered.workspace_id.as_bytes()
+            != registration.active.workspace_id.as_bytes()
+            || registration.registered.record_id != registration.active.record_id
+        {
+            return Err(StoreError::InvalidCapability);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reconcile_registration(
+        &mut self,
+        registration: &mut PreparedWorkspaceRegistration,
+    ) -> Result<Option<bool>, StoreError> {
+        self.validate_registration_lineage(registration)?;
+        if registration.stage == RegistrationStage::Complete {
+            return Err(StoreError::InvalidCapability);
+        }
+        if registration.stage == RegistrationStage::NoOwnedRecord {
+            return Ok(None);
+        }
+        let current = self.persistence.read_bounded(
+            &registration.registered.record_id,
+            phase_one_local_record_limit()?,
+        )?;
+        match current {
+            None if matches!(
+                registration.stage,
+                RegistrationStage::Pending | RegistrationStage::Creating
+            ) =>
+            {
+                registration.stage = RegistrationStage::Pending;
+                Ok(None)
+            }
+            None if registration.removal_pending => match registration.stage {
+                RegistrationStage::Active => Ok(Some(true)),
+                RegistrationStage::Registered => Ok(Some(false)),
+                _ => Err(StoreError::InvalidCapability),
+            },
+            None => Err(StoreError::InvalidCapability),
+            Some(current) if current == registration.registered_canonical => {
+                registration.stage = RegistrationStage::Registered;
+                Ok(Some(false))
+            }
+            Some(current) if current == registration.active_canonical => {
+                registration.stage = RegistrationStage::Active;
+                Ok(Some(true))
+            }
+            Some(_)
+                if matches!(
+                    registration.stage,
+                    RegistrationStage::Pending | RegistrationStage::Creating
+                ) =>
+            {
+                registration.stage = RegistrationStage::NoOwnedRecord;
+                Ok(None)
+            }
+            Some(_) => Err(StoreError::InvalidCapability),
+        }
+    }
+
+    pub(crate) fn cancel_registration_if_absent(
+        &mut self,
+        registration: &mut PreparedWorkspaceRegistration,
+    ) -> Result<(), StoreError> {
+        if registration.stage == RegistrationStage::NoOwnedRecord {
+            registration.stage = RegistrationStage::Complete;
+            return Ok(());
+        }
+        if self.reconcile_registration(registration)?.is_some() {
+            return Err(StoreError::InvalidCapability);
+        }
+        registration.stage = RegistrationStage::Complete;
+        Ok(())
+    }
+
+    pub(crate) fn activate_registration(
+        &mut self,
+        registration: &mut PreparedWorkspaceRegistration,
+    ) -> Result<(), StoreError> {
+        self.validate_registration_lineage(registration)?;
+        match registration.stage {
+            RegistrationStage::Active => {
+                return Ok(());
+            }
+            RegistrationStage::ActivationPending => {
+                match self.persistence.read_bounded(
+                    &registration.registered.record_id,
+                    phase_one_local_record_limit()?,
+                )? {
+                    Some(current) if current == registration.active_canonical => {
+                        self.persistence.sync_directory()?;
+                        registration.stage = RegistrationStage::Active;
+                        return Ok(());
+                    }
+                    Some(current) if current == registration.registered_canonical => {}
+                    _ => return Err(StoreError::InvalidCapability),
+                }
+            }
+            RegistrationStage::Registered => {
+                match self.persistence.read_bounded(
+                    &registration.registered.record_id,
+                    phase_one_local_record_limit()?,
+                )? {
+                    Some(current) if current == registration.registered_canonical => {}
+                    _ => return Err(StoreError::InvalidCapability),
+                }
+            }
+            RegistrationStage::Pending | RegistrationStage::Creating => {
+                return Err(StoreError::InvalidCapability);
+            }
+            RegistrationStage::NoOwnedRecord => return Err(StoreError::IdentityCollision),
+            RegistrationStage::Complete => return Err(StoreError::InvalidCapability),
+        }
+        registration.stage = RegistrationStage::ActivationPending;
+        match self.persistence.replace_if_exact(
+            &registration.registered.record_id,
+            &registration.registered_canonical,
+            &registration.active_canonical,
+        ) {
+            Ok(DurableMutationOutcome::Applied) => {
+                registration.stage = RegistrationStage::Active;
+                Ok(())
+            }
+            Ok(DurableMutationOutcome::AppliedNeedsDirectorySync) => {
+                Err(StoreError::DurabilityPending)
+            }
+            Ok(DurableMutationOutcome::NotApplied) => {
+                match self.persistence.read_bounded(
+                    &registration.registered.record_id,
+                    phase_one_local_record_limit()?,
+                )? {
+                    Some(current) if current == registration.active_canonical => {
+                        Err(StoreError::DurabilityPending)
+                    }
+                    Some(current) if current == registration.registered_canonical => {
+                        Err(StoreError::InvalidCapability)
+                    }
+                    _ => Err(StoreError::InvalidCapability),
+                }
+            }
+            Err(primary) => {
+                match self.persistence.read_bounded(
+                    &registration.registered.record_id,
+                    phase_one_local_record_limit()?,
+                )? {
+                    Some(current) if current == registration.registered_canonical => Err(primary),
+                    Some(current) if current == registration.active_canonical => {
+                        Err(StoreError::DurabilityPending)
+                    }
+                    _ => Err(StoreError::InvalidCapability),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn unregister_registration_absence(
+        &mut self,
+        registration: &mut PreparedWorkspaceRegistration,
+        proof: &mut WorkspaceAbsenceProof,
+        authority: &WorkspaceAbsenceAuthority,
+        active: bool,
+    ) -> Result<(), StoreError> {
+        self.validate_registration_lineage(registration)?;
+        let (binding, canonical) = if active {
+            (&registration.active, &registration.active_canonical)
+        } else {
+            (&registration.registered, &registration.registered_canonical)
+        };
+        let exact = proof.active
+            && Arc::ptr_eq(&registration.authority, &authority.inner)
+            && Arc::ptr_eq(&proof.authority, &authority.inner)
+            && proof.workspace_id == *binding.workspace_id.as_bytes()
+            && proof.vault == binding.vault
+            && proof.generation == binding.generation
+            && proof.record_id == binding.record_id
+            && proof.record_commitment == binding.record_commitment;
+        if !exact {
+            return Err(StoreError::InvalidCapability);
+        }
+        if registration.removal_pending {
+            if self
+                .persistence
+                .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+                .is_some()
+            {
+                return Err(StoreError::InvalidCapability);
+            }
+            self.persistence.sync_directory()?;
+            registration.removal_pending = false;
+            registration.stage = RegistrationStage::Complete;
+            proof.active = false;
+            return Ok(());
+        }
+        match self
+            .persistence
+            .remove_if_exact(&binding.record_id, canonical)
+        {
+            Ok(DurableMutationOutcome::Applied) => {}
+            Ok(DurableMutationOutcome::AppliedNeedsDirectorySync) => {
+                registration.removal_pending = true;
+                return Err(StoreError::DurabilityPending);
+            }
+            Ok(DurableMutationOutcome::NotApplied) => {
+                if self
+                    .persistence
+                    .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+                    .is_none()
+                {
+                    registration.removal_pending = true;
+                    return Err(StoreError::DurabilityPending);
+                }
+                return Err(StoreError::InvalidCapability);
+            }
+            Err(primary) => {
+                match self
+                    .persistence
+                    .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+                {
+                    None => {
+                        registration.removal_pending = true;
+                        return Err(StoreError::DurabilityPending);
+                    }
+                    Some(current) if current == *canonical => return Err(primary),
+                    Some(_) => return Err(StoreError::InvalidCapability),
+                }
+            }
+        }
+        registration.stage = RegistrationStage::Complete;
+        proof.active = false;
+        Ok(())
     }
 
     pub(crate) fn activate(
@@ -415,7 +864,7 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
         match self.persistence.replace_if_exact(
             &registered.binding.record_id,
             &canonical,
-            replacement.clone(),
+            &replacement,
         ) {
             Ok(DurableMutationOutcome::Applied) => {}
             Ok(DurableMutationOutcome::AppliedNeedsDirectorySync) => {
@@ -580,6 +1029,116 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
         Ok(())
     }
 
+    pub(crate) fn prepare_workspace_unregister(
+        &mut self,
+        active: &mut ActiveWorkspace,
+        authority: &WorkspaceAbsenceAuthority,
+        key: &dyn CleanupAuthenticator,
+    ) -> Result<PreparedWorkspaceUnregister, StoreError> {
+        if !active.active || active.removal_pending {
+            return Err(StoreError::InvalidCapability);
+        }
+        self.validate_token(&active.binding)?;
+        let (current, canonical) = self.read_authenticated(&active.binding.record_id, key)?;
+        validate_transition_source(
+            &active.binding,
+            &current,
+            &canonical,
+            CleanupWorkspaceState::Active,
+        )?;
+        let binding = token_binding(&current, &canonical);
+        active.active = false;
+        Ok(PreparedWorkspaceUnregister {
+            binding,
+            canonical,
+            active: true,
+            removal_pending: false,
+            authority: Arc::clone(&authority.inner),
+        })
+    }
+
+    pub(crate) fn unregister_prepared_absence(
+        &mut self,
+        prepared: &mut PreparedWorkspaceUnregister,
+        proof: &mut WorkspaceAbsenceProof,
+        authority: &WorkspaceAbsenceAuthority,
+    ) -> Result<(), StoreError> {
+        if !prepared.active || !proof.active {
+            return Err(StoreError::InvalidCapability);
+        }
+        let binding = &prepared.binding;
+        self.validate_token(binding)?;
+        let exact = Arc::ptr_eq(&prepared.authority, &authority.inner)
+            && Arc::ptr_eq(&proof.authority, &authority.inner)
+            && proof.workspace_id == *binding.workspace_id.as_bytes()
+            && proof.vault == binding.vault
+            && proof.generation == binding.generation
+            && proof.record_id == binding.record_id
+            && proof.record_commitment == binding.record_commitment;
+        if !exact {
+            return Err(StoreError::InvalidCapability);
+        }
+        if prepared.removal_pending {
+            if self
+                .persistence
+                .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+                .is_some()
+            {
+                return Err(StoreError::InvalidCapability);
+            }
+            self.persistence.sync_directory()?;
+            prepared.active = false;
+            prepared.removal_pending = false;
+            proof.active = false;
+            return Ok(());
+        }
+        let current = self
+            .persistence
+            .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+            .ok_or(StoreError::InvalidCapability)?;
+        if current != prepared.canonical || record_commitment(&current) != binding.record_commitment
+        {
+            return Err(StoreError::InvalidCapability);
+        }
+        match self
+            .persistence
+            .remove_if_exact(&binding.record_id, &prepared.canonical)
+        {
+            Ok(DurableMutationOutcome::Applied) => {}
+            Ok(DurableMutationOutcome::AppliedNeedsDirectorySync) => {
+                prepared.removal_pending = true;
+                return Err(StoreError::DurabilityPending);
+            }
+            Ok(DurableMutationOutcome::NotApplied) => {
+                if self
+                    .persistence
+                    .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+                    .is_none()
+                {
+                    prepared.removal_pending = true;
+                    return Err(StoreError::DurabilityPending);
+                }
+                return Err(StoreError::InvalidCapability);
+            }
+            Err(primary) => {
+                match self
+                    .persistence
+                    .read_bounded(&binding.record_id, phase_one_local_record_limit()?)?
+                {
+                    None => {
+                        prepared.removal_pending = true;
+                        return Err(StoreError::DurabilityPending);
+                    }
+                    Some(bytes) if bytes == prepared.canonical => return Err(primary),
+                    Some(_) => return Err(StoreError::InvalidCapability),
+                }
+            }
+        }
+        prepared.active = false;
+        proof.active = false;
+        Ok(())
+    }
+
     pub(crate) fn authenticated_records(
         &mut self,
         key: &dyn CleanupAuthenticator,
@@ -587,7 +1146,7 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
         let mut records = Vec::new();
         records
             .try_reserve(self.enumeration_limit.min(64))
-            .map_err(|_| StoreError::LimitExceeded)?;
+            .map_err(|_| StoreError::AllocationFailed)?;
         let vault = self.vault;
         let generation = self.generation;
         let mut visitor = |storage_id: [u8; 32], bytes: &[u8]| {
@@ -600,7 +1159,7 @@ impl<R: SecureRandom, P: CleanupRecordPersistence> CleanupRegistry<R, P> {
             }
             records
                 .try_reserve(1)
-                .map_err(|_| StoreError::LimitExceeded)?;
+                .map_err(|_| StoreError::AllocationFailed)?;
             records.push(AuthenticatedCleanupRecord {
                 state: record.state,
                 binding: token_binding(&record, bytes),
@@ -960,6 +1519,10 @@ pub mod test_support {
         key: LocalVerificationKey,
     }
 
+    pub struct ScriptedPreparedRegistration {
+        inner: PreparedWorkspaceRegistration,
+    }
+
     impl ScriptedCleanupRegistry {
         pub fn new(
             vault: VaultId,
@@ -987,6 +1550,28 @@ pub mod test_support {
 
         pub fn reserve_and_register(&mut self) -> Result<RegisteredWorkspace, StoreError> {
             self.registry.reserve_and_register(&self.key)
+        }
+
+        pub fn prepare_registration(&mut self) -> Result<ScriptedPreparedRegistration, StoreError> {
+            let authority = WorkspaceAbsenceAuthority::new(Arc::new(AlwaysAbsent));
+            self.registry
+                .prepare_registration(&self.key, &authority)
+                .map(|inner| ScriptedPreparedRegistration { inner })
+        }
+
+        pub fn commit_prepared_registration(
+            &mut self,
+            registration: &mut ScriptedPreparedRegistration,
+        ) -> Result<(), StoreError> {
+            self.registry.commit_registration(&mut registration.inner)
+        }
+
+        pub fn cancel_prepared_registration(
+            &mut self,
+            registration: &mut ScriptedPreparedRegistration,
+        ) -> Result<(), StoreError> {
+            self.registry
+                .cancel_registration_if_absent(&mut registration.inner)
         }
 
         pub fn activate(
@@ -1155,14 +1740,25 @@ pub mod test_support {
     }
 
     impl CleanupRecordPersistence for ScriptedPersistence {
+        fn cleanup_staging_bounded(&mut self, _maximum_records: usize) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn record_count_bounded(&mut self, maximum_records: usize) -> Result<usize, StoreError> {
+            if self.records.len() > maximum_records {
+                return Err(StoreError::LimitExceeded);
+            }
+            Ok(self.records.len())
+        }
+
         fn create_if_absent(
             &mut self,
             record_id: [u8; 32],
-            canonical_record: Vec<u8>,
+            canonical_record: &[u8],
         ) -> Result<CreateRecordOutcome, StoreError> {
             if let std::collections::btree_map::Entry::Vacant(entry) = self.records.entry(record_id)
             {
-                entry.insert(canonical_record);
+                entry.insert(canonical_record.to_vec());
                 Ok(CreateRecordOutcome::Created)
             } else {
                 Ok(CreateRecordOutcome::AlreadyExists)
@@ -1187,7 +1783,7 @@ pub mod test_support {
             &mut self,
             record_id: &[u8; 32],
             expected: &[u8],
-            replacement: Vec<u8>,
+            replacement: &[u8],
         ) -> Result<DurableMutationOutcome, StoreError> {
             if matches!(
                 self.faults.front(),
@@ -1204,7 +1800,7 @@ pub mod test_support {
             if current.as_slice() != expected {
                 return Ok(DurableMutationOutcome::NotApplied);
             }
-            *current = replacement;
+            *current = replacement.to_vec();
             if matches!(
                 self.faults.front(),
                 Some(CleanupPersistenceFault::ReplaceAfterEffect)
@@ -1248,6 +1844,10 @@ pub mod test_support {
 
         fn sync_directory(&mut self) -> Result<(), StoreError> {
             self.directory_sync_count = self.directory_sync_count.saturating_add(1);
+            Ok(())
+        }
+
+        fn sync_registration_source_directory(&mut self) -> Result<(), StoreError> {
             Ok(())
         }
 

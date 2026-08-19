@@ -13,8 +13,10 @@ use crate::StoreError;
 use crate::batch::DurableBatch;
 use crate::cleanup::{
     ActiveWorkspace, AuthenticatedCleanupRecord, CleanupRecordPersistence, CleanupRecordVisitor,
-    CleanupRegistry, CreateRecordOutcome, RegisteredWorkspace, WorkspaceAbsenceAuthority,
-    WorkspaceAbsenceProof,
+    CleanupRegistry, CreateRecordOutcome,
+    PreparedWorkspaceRegistration as PreparedCleanupRegistration,
+    PreparedWorkspaceUnregister as PreparedCleanupUnregister, RegisteredWorkspace,
+    WorkspaceAbsenceAuthority, WorkspaceAbsenceProof,
 };
 use crate::device::{
     ActiveDeviceSlot, CreateDeviceRecordOutcome, DeviceEnrollment, DeviceRecordVisitor,
@@ -50,6 +52,95 @@ pub struct UnlockedVault {
     pub(crate) authenticated_bootstrap: Option<Arc<[u8]>>,
 }
 
+/// Linear revocation-safe authority for one exact authenticated workspace record deletion.
+pub struct PreparedWorkspaceUnregister {
+    store: Arc<VaultStore>,
+    generation: u64,
+    authority: WorkspaceAbsenceAuthority,
+    prepared: PreparedCleanupUnregister,
+}
+
+/// Caller-retained exact registration and cleanup intent prepared before durable publication.
+pub struct PreparedWorkspaceRegistration {
+    store: Arc<VaultStore>,
+    generation: u64,
+    authority: WorkspaceAbsenceAuthority,
+    prepared: PreparedCleanupRegistration,
+}
+
+impl PreparedWorkspaceRegistration {
+    #[must_use]
+    pub const fn workspace_id(&self) -> &crate::CleanupWorkspaceId {
+        self.prepared.workspace_id()
+    }
+
+    pub fn unregister_absent(&mut self) -> Result<(), StoreError> {
+        let active = {
+            let _mutation = self.store.begin_store_mutation()?;
+            let mut registry = CleanupRegistry::new(
+                self.store.layout.vault,
+                self.generation,
+                1_024,
+                OsRandom,
+                FilesystemCleanupPersistence::new(
+                    &self.store.layout.cleanup_registry,
+                    &self.store.layout.cleanup_staging,
+                ),
+            )?;
+            let Some(active) = registry.reconcile_registration(&mut self.prepared)? else {
+                return registry.cancel_registration_if_absent(&mut self.prepared);
+            };
+            active
+        };
+        let mut proof = self
+            .authority
+            .acquire_registration(&self.prepared, active)?;
+        let _mutation = self.store.begin_store_mutation()?;
+        let mut registry = CleanupRegistry::new(
+            self.store.layout.vault,
+            self.generation,
+            1_024,
+            OsRandom,
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
+        )?;
+        if registry.reconcile_registration(&mut self.prepared)? != Some(active) {
+            return Err(StoreError::InvalidCapability);
+        }
+        registry.unregister_registration_absence(
+            &mut self.prepared,
+            &mut proof,
+            &self.authority,
+            active,
+        )
+    }
+}
+
+impl PreparedWorkspaceUnregister {
+    #[must_use]
+    pub const fn workspace_id(&self) -> &crate::CleanupWorkspaceId {
+        self.prepared.workspace_id()
+    }
+
+    pub fn unregister_absent(&mut self) -> Result<(), StoreError> {
+        let mut proof = self.authority.acquire_prepared(&self.prepared)?;
+        let _mutation = self.store.begin_store_mutation()?;
+        let mut registry = CleanupRegistry::new(
+            self.store.layout.vault,
+            self.generation,
+            1_024,
+            OsRandom,
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
+        )?;
+        registry.unregister_prepared_absence(&mut self.prepared, &mut proof, &self.authority)
+    }
+}
+
 pub(crate) struct StoreMutation<'a> {
     active: &'a AtomicBool,
     _lock: ExclusiveFileLock,
@@ -63,6 +154,42 @@ impl Drop for StoreMutation<'_> {
 
 pub(crate) struct FilesystemCleanupPersistence<'a> {
     directory: &'a Directory,
+    staging: &'a Directory,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegistrationPersistenceFault {
+    ShortWrite,
+    FileSync,
+    PublicationBeforeEffect,
+    PublicationAfterEffect,
+    SourceDirectorySync,
+    DestinationDirectorySync,
+    Readback,
+}
+
+#[cfg(test)]
+thread_local! {
+    static REGISTRATION_PERSISTENCE_FAULT: std::cell::Cell<Option<RegistrationPersistenceFault>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn install_registration_persistence_fault(fault: RegistrationPersistenceFault) {
+    REGISTRATION_PERSISTENCE_FAULT.set(Some(fault));
+}
+
+#[cfg(test)]
+fn take_registration_persistence_fault(fault: RegistrationPersistenceFault) -> bool {
+    REGISTRATION_PERSISTENCE_FAULT.with(|installed| {
+        if installed.get() == Some(fault) {
+            installed.set(None);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 pub(crate) struct FilesystemDeviceSlotPersistence<'a> {
@@ -92,7 +219,7 @@ impl DeviceSlotPersistence for FilesystemDeviceSlotPersistence<'_> {
             return Err(StoreError::LimitExceeded);
         }
         let name = component(&encode_hex(&record_id))?;
-        let mut file = match self.layout.device_slots.create_file_new(&name) {
+        let mut file = match self.layout.device_slots.create_private_file_new(&name) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Ok(CreateDeviceRecordOutcome::AlreadyExists);
@@ -220,37 +347,142 @@ fn visit_local_directory(
 }
 
 impl<'a> FilesystemCleanupPersistence<'a> {
-    pub(crate) const fn new(directory: &'a Directory) -> Self {
-        Self { directory }
+    pub(crate) const fn new(directory: &'a Directory, staging: &'a Directory) -> Self {
+        Self { directory, staging }
     }
 }
 
 impl CleanupRecordPersistence for FilesystemCleanupPersistence<'_> {
+    fn cleanup_staging_bounded(&mut self, _maximum_records: usize) -> Result<(), StoreError> {
+        let names = self.staging.entry_names_bounded(1)?;
+        if names.is_empty() {
+            return Ok(());
+        }
+        for name in names {
+            let value = name.as_str();
+            if value != "registration" {
+                return Err(StoreError::MalformedObject);
+            }
+            self.staging.remove_file(&component(value)?)?;
+        }
+        self.staging.sync()?;
+        Ok(())
+    }
+
+    fn record_count_bounded(&mut self, maximum_records: usize) -> Result<usize, StoreError> {
+        Ok(self.directory.entry_names_bounded(maximum_records)?.len())
+    }
+
     fn create_if_absent(
         &mut self,
         record_id: [u8; 32],
-        canonical_record: Vec<u8>,
+        canonical_record: &[u8],
     ) -> Result<CreateRecordOutcome, StoreError> {
         let name = component(&encode_hex(&record_id))?;
-        let mut file = match self.directory.create_file_new(&name) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Ok(CreateRecordOutcome::AlreadyExists);
-            }
+        let staged = component("registration")?;
+        match self.staging.remove_file(&staged) {
+            Ok(()) => self.staging.sync()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(StoreError::from(error)),
-        };
-        let operation = file
-            .write_all(&canonical_record)
-            .and_then(|()| file.sync_all())
-            .and_then(|()| self.directory.sync());
-        if let Err(primary) = operation {
-            return match self.directory.remove_file(&name) {
+        }
+        let mut file = self.staging.create_private_file_new(&staged)?;
+        #[cfg(test)]
+        if take_registration_persistence_fault(RegistrationPersistenceFault::ShortWrite) {
+            let count = canonical_record.len().min(7);
+            file.write_all(&canonical_record[..count])?;
+            let primary = std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "injected short registration write",
+            );
+            return match self.staging.remove_opened_file_if_matches(&file, &staged) {
                 Ok(()) => Err(StoreError::Io(primary)),
                 Err(cleanup) => Err(StoreError::CleanupAfterFailure {
                     primary: Box::new(StoreError::Io(primary)),
                     cleanup,
                 }),
             };
+        }
+        if let Err(primary) = file.write_all(canonical_record).and_then(|()| {
+            #[cfg(test)]
+            if take_registration_persistence_fault(RegistrationPersistenceFault::FileSync) {
+                return Err(std::io::Error::other(
+                    "injected registration file sync failure",
+                ));
+            }
+            file.sync_all()
+        }) {
+            return match self.staging.remove_opened_file_if_matches(&file, &staged) {
+                Ok(()) => Err(StoreError::Io(primary)),
+                Err(cleanup) => Err(StoreError::CleanupAfterFailure {
+                    primary: Box::new(StoreError::Io(primary)),
+                    cleanup,
+                }),
+            };
+        }
+        #[cfg(test)]
+        if take_registration_persistence_fault(
+            RegistrationPersistenceFault::PublicationBeforeEffect,
+        ) {
+            self.staging.remove_opened_file_if_matches(&file, &staged)?;
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected registration publication failure before effect",
+            )));
+        }
+        match self.staging.rename_opened_no_replace_from_private_staging(
+            &file,
+            &staged,
+            self.directory,
+            &name,
+        ) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                self.staging.remove_opened_file_if_matches(&file, &staged)?;
+                return Ok(CreateRecordOutcome::AlreadyExists);
+            }
+            Err(primary) => {
+                return match self.staging.remove_opened_file_if_matches(&file, &staged) {
+                    Ok(()) => Err(StoreError::Io(primary)),
+                    Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {
+                        Err(StoreError::Io(primary))
+                    }
+                    Err(cleanup) => Err(StoreError::CleanupAfterFailure {
+                        primary: Box::new(StoreError::Io(primary)),
+                        cleanup,
+                    }),
+                };
+            }
+        }
+        #[cfg(test)]
+        if take_registration_persistence_fault(RegistrationPersistenceFault::PublicationAfterEffect)
+        {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected registration publication failure after effect",
+            )));
+        }
+        #[cfg(test)]
+        if take_registration_persistence_fault(RegistrationPersistenceFault::SourceDirectorySync) {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected registration source-directory sync failure",
+            )));
+        }
+        self.staging.sync()?;
+        #[cfg(test)]
+        if take_registration_persistence_fault(
+            RegistrationPersistenceFault::DestinationDirectorySync,
+        ) {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected registration destination-directory sync failure",
+            )));
+        }
+        self.directory.sync()?;
+        #[cfg(test)]
+        if take_registration_persistence_fault(RegistrationPersistenceFault::Readback) {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected registration readback failure",
+            )));
+        }
+        if read_optional(self.directory, &name)?.as_deref() != Some(canonical_record) {
+            return Err(StoreError::LocalStateAuthenticationFailed);
         }
         Ok(CreateRecordOutcome::Created)
     }
@@ -274,10 +506,10 @@ impl CleanupRecordPersistence for FilesystemCleanupPersistence<'_> {
         &mut self,
         record_id: &[u8; 32],
         expected: &[u8],
-        replacement: Vec<u8>,
+        replacement: &[u8],
     ) -> Result<DurableMutationOutcome, StoreError> {
         let name = component(&encode_hex(record_id))?;
-        replace_durable_if_exact(self.directory, &name, expected, &replacement)
+        replace_durable_if_exact(self.directory, &name, expected, replacement)
     }
 
     fn remove_if_exact(
@@ -291,6 +523,10 @@ impl CleanupRecordPersistence for FilesystemCleanupPersistence<'_> {
 
     fn sync_directory(&mut self) -> Result<(), StoreError> {
         self.directory.sync().map_err(StoreError::from)
+    }
+
+    fn sync_registration_source_directory(&mut self) -> Result<(), StoreError> {
+        self.staging.sync().map_err(StoreError::from)
     }
 
     fn visit_bounded(
@@ -551,9 +787,88 @@ impl UnlockedVault {
             self.generation,
             1_024,
             OsRandom,
-            FilesystemCleanupPersistence::new(&self.store.layout.cleanup_registry),
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
         )?;
         registry.reserve_and_register(self.keys.as_ref())
+    }
+
+    pub fn prepare_cleanup_workspace_registration(
+        &self,
+    ) -> Result<PreparedWorkspaceRegistration, StoreError> {
+        let authority = self
+            .workspace_absence_authority
+            .as_ref()
+            .ok_or(StoreError::InvalidCapability)?;
+        let _mutation = self.store.begin_store_mutation()?;
+        let _publication = self.keys.authorize_publication(self.generation)?;
+        let mut registry = CleanupRegistry::new(
+            self.store.layout.vault,
+            self.generation,
+            1_024,
+            OsRandom,
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
+        )?;
+        let prepared = registry.prepare_registration(self.keys.as_ref(), authority)?;
+        Ok(PreparedWorkspaceRegistration {
+            store: Arc::clone(&self.store),
+            generation: self.generation,
+            authority: authority.clone_bound(),
+            prepared,
+        })
+    }
+
+    pub fn commit_cleanup_workspace_registration(
+        &self,
+        registration: &mut PreparedWorkspaceRegistration,
+    ) -> Result<(), StoreError> {
+        if !Arc::ptr_eq(&self.store, &registration.store)
+            || self.generation != registration.generation
+        {
+            return Err(StoreError::InvalidCapability);
+        }
+        let _mutation = self.store.begin_store_mutation()?;
+        let _publication = self.keys.authorize_publication(self.generation)?;
+        let mut registry = CleanupRegistry::new(
+            self.store.layout.vault,
+            self.generation,
+            1_024,
+            OsRandom,
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
+        )?;
+        registry.commit_registration(&mut registration.prepared)
+    }
+
+    pub fn activate_cleanup_workspace_registration(
+        &self,
+        registration: &mut PreparedWorkspaceRegistration,
+    ) -> Result<(), StoreError> {
+        if !Arc::ptr_eq(&self.store, &registration.store)
+            || self.generation != registration.generation
+        {
+            return Err(StoreError::InvalidCapability);
+        }
+        let _mutation = self.store.begin_store_mutation()?;
+        let _publication = self.keys.authorize_publication(self.generation)?;
+        let mut registry = CleanupRegistry::new(
+            self.store.layout.vault,
+            self.generation,
+            1_024,
+            OsRandom,
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
+        )?;
+        registry.activate_registration(&mut registration.prepared)
     }
 
     pub fn activate_cleanup_workspace(
@@ -567,9 +882,42 @@ impl UnlockedVault {
             self.generation,
             1_024,
             OsRandom,
-            FilesystemCleanupPersistence::new(&self.store.layout.cleanup_registry),
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
         )?;
         registry.activate(registered, self.keys.as_ref())
+    }
+
+    pub fn prepare_cleanup_workspace_unregister(
+        &self,
+        active: &mut ActiveWorkspace,
+    ) -> Result<PreparedWorkspaceUnregister, StoreError> {
+        let authority = self
+            .workspace_absence_authority
+            .as_ref()
+            .ok_or(StoreError::InvalidCapability)?;
+        let _mutation = self.store.begin_store_mutation()?;
+        let _publication = self.keys.authorize_publication(self.generation)?;
+        let mut registry = CleanupRegistry::new(
+            self.store.layout.vault,
+            self.generation,
+            1_024,
+            OsRandom,
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
+        )?;
+        let prepared =
+            registry.prepare_workspace_unregister(active, authority, self.keys.as_ref())?;
+        Ok(PreparedWorkspaceUnregister {
+            store: Arc::clone(&self.store),
+            generation: self.generation,
+            authority: authority.clone_bound(),
+            prepared,
+        })
     }
 
     pub fn authenticated_cleanup_workspaces(
@@ -581,7 +929,10 @@ impl UnlockedVault {
             self.generation,
             1_024,
             OsRandom,
-            FilesystemCleanupPersistence::new(&self.store.layout.cleanup_registry),
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
         )?;
         registry.authenticated_records(self.keys.as_ref())
     }
@@ -612,7 +963,10 @@ impl UnlockedVault {
             self.generation,
             1_024,
             OsRandom,
-            FilesystemCleanupPersistence::new(&self.store.layout.cleanup_registry),
+            FilesystemCleanupPersistence::new(
+                &self.store.layout.cleanup_registry,
+                &self.store.layout.cleanup_staging,
+            ),
         )?;
         registry.unregister_verified_absence(active, proof, authority, self.keys.as_ref())
     }
@@ -911,5 +1265,304 @@ mod tests {
                 .is_empty()
         );
         unlocked.close().unwrap();
+    }
+
+    #[test]
+    fn prepared_workspace_unregister_survives_general_root_revocation_and_is_linear() {
+        let repository = TempDir::new().unwrap();
+        let local = TempDir::new().unwrap();
+        let vault = VaultId::from_bytes([0x91; 16]);
+        let store = Arc::new(
+            VaultStore::create_empty(
+                &repository.path().canonicalize().unwrap(),
+                &local.path().canonicalize().unwrap(),
+                vault,
+            )
+            .unwrap(),
+        );
+        let root = VaultRootKey::generate(&mut FixedRandom(0x92)).unwrap();
+        let keys = KeyCell::new(root).unwrap();
+        let generation = keys.generation();
+        let unlocked = UnlockedVault {
+            store: Arc::clone(&store),
+            keys: Arc::new(keys),
+            generation,
+            workspace_absence_authority: None,
+            verified_chunks: Arc::new(Mutex::new(HashMap::new())),
+            stamp_cache_policy: Arc::new(StampCachePolicy::new()),
+            authenticated_bootstrap: None,
+        }
+        .with_workspace_absence_authority(WorkspaceAbsenceAuthority::new(Arc::new(AlwaysAbsent)));
+        let mut registered = unlocked.register_cleanup_workspace().unwrap();
+        let mut active = unlocked
+            .activate_cleanup_workspace(&mut registered)
+            .unwrap();
+        let mut prepared = unlocked
+            .prepare_cleanup_workspace_unregister(&mut active)
+            .unwrap();
+        let child = prepared.workspace_id().child_name();
+
+        unlocked.revocation_handle().revoke();
+        prepared.unregister_absent().unwrap();
+
+        assert_eq!(prepared.workspace_id().child_name(), child);
+        assert!(matches!(
+            prepared.unregister_absent(),
+            Err(StoreError::InvalidCapability)
+        ));
+        assert!(
+            store
+                .layout
+                .cleanup_registry
+                .entry_names_bounded(1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn prepared_registration_unregisters_after_revocation_without_activation() {
+        let repository = TempDir::new().unwrap();
+        let local = TempDir::new().unwrap();
+        let vault = VaultId::from_bytes([0xa1; 16]);
+        let store = Arc::new(
+            VaultStore::create_empty(
+                &repository.path().canonicalize().unwrap(),
+                &local.path().canonicalize().unwrap(),
+                vault,
+            )
+            .unwrap(),
+        );
+        let root = VaultRootKey::generate(&mut FixedRandom(0xa2)).unwrap();
+        let keys = KeyCell::new(root).unwrap();
+        let generation = keys.generation();
+        let unlocked = UnlockedVault {
+            store: Arc::clone(&store),
+            keys: Arc::new(keys),
+            generation,
+            workspace_absence_authority: None,
+            verified_chunks: Arc::new(Mutex::new(HashMap::new())),
+            stamp_cache_policy: Arc::new(StampCachePolicy::new()),
+            authenticated_bootstrap: None,
+        }
+        .with_workspace_absence_authority(WorkspaceAbsenceAuthority::new(Arc::new(AlwaysAbsent)));
+
+        let mut registration = unlocked.prepare_cleanup_workspace_registration().unwrap();
+        assert!(
+            unlocked
+                .authenticated_cleanup_workspaces()
+                .unwrap()
+                .is_empty()
+        );
+        unlocked
+            .commit_cleanup_workspace_registration(&mut registration)
+            .unwrap();
+        assert_eq!(
+            unlocked.authenticated_cleanup_workspaces().unwrap()[0].state(),
+            crate::CleanupWorkspaceState::Registered
+        );
+
+        unlocked.revocation_handle().revoke();
+        registration.unregister_absent().unwrap();
+        assert!(
+            store
+                .layout
+                .cleanup_registry
+                .entry_names_bounded(1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            registration.unregister_absent(),
+            Err(StoreError::InvalidCapability)
+        ));
+    }
+
+    #[test]
+    fn prepared_registration_cleans_the_single_crash_staging_slot_before_publish() {
+        let repository = TempDir::new().unwrap();
+        let local = TempDir::new().unwrap();
+        let vault = VaultId::from_bytes([0xa3; 16]);
+        let store = Arc::new(
+            VaultStore::create_empty(
+                &repository.path().canonicalize().unwrap(),
+                &local.path().canonicalize().unwrap(),
+                vault,
+            )
+            .unwrap(),
+        );
+        let mut stale = store
+            .layout
+            .cleanup_staging
+            .create_private_file_new(&component("registration").unwrap())
+            .unwrap();
+        stale.write_all(b"partial authenticated record").unwrap();
+        stale.sync_all().unwrap();
+        store.layout.cleanup_staging.sync().unwrap();
+        drop(stale);
+
+        let root = VaultRootKey::generate(&mut FixedRandom(0xa4)).unwrap();
+        let keys = KeyCell::new(root).unwrap();
+        let generation = keys.generation();
+        let unlocked = UnlockedVault {
+            store: Arc::clone(&store),
+            keys: Arc::new(keys),
+            generation,
+            workspace_absence_authority: None,
+            verified_chunks: Arc::new(Mutex::new(HashMap::new())),
+            stamp_cache_policy: Arc::new(StampCachePolicy::new()),
+            authenticated_bootstrap: None,
+        }
+        .with_workspace_absence_authority(WorkspaceAbsenceAuthority::new(Arc::new(AlwaysAbsent)));
+
+        let mut registration = unlocked.prepare_cleanup_workspace_registration().unwrap();
+        unlocked
+            .commit_cleanup_workspace_registration(&mut registration)
+            .unwrap();
+
+        assert!(
+            store
+                .layout
+                .cleanup_staging
+                .entry_names_bounded(1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            unlocked.authenticated_cleanup_workspaces().unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn prepared_registration_faults_never_publish_a_partial_final_record_and_retry_exactly() {
+        for fault in [
+            RegistrationPersistenceFault::ShortWrite,
+            RegistrationPersistenceFault::FileSync,
+            RegistrationPersistenceFault::PublicationBeforeEffect,
+            RegistrationPersistenceFault::PublicationAfterEffect,
+            RegistrationPersistenceFault::SourceDirectorySync,
+            RegistrationPersistenceFault::DestinationDirectorySync,
+            RegistrationPersistenceFault::Readback,
+        ] {
+            let repository = TempDir::new().unwrap();
+            let local = TempDir::new().unwrap();
+            let vault = VaultId::from_bytes([0xa5; 16]);
+            let store = Arc::new(
+                VaultStore::create_empty(
+                    &repository.path().canonicalize().unwrap(),
+                    &local.path().canonicalize().unwrap(),
+                    vault,
+                )
+                .unwrap(),
+            );
+            let root = VaultRootKey::generate(&mut FixedRandom(0xa6)).unwrap();
+            let keys = KeyCell::new(root).unwrap();
+            let generation = keys.generation();
+            let unlocked = UnlockedVault {
+                store: Arc::clone(&store),
+                keys: Arc::new(keys),
+                generation,
+                workspace_absence_authority: None,
+                verified_chunks: Arc::new(Mutex::new(HashMap::new())),
+                stamp_cache_policy: Arc::new(StampCachePolicy::new()),
+                authenticated_bootstrap: None,
+            }
+            .with_workspace_absence_authority(WorkspaceAbsenceAuthority::new(Arc::new(
+                AlwaysAbsent,
+            )));
+            let mut registration = unlocked.prepare_cleanup_workspace_registration().unwrap();
+
+            install_registration_persistence_fault(fault);
+            assert!(matches!(
+                unlocked.commit_cleanup_workspace_registration(&mut registration),
+                Err(StoreError::Io(_))
+            ));
+            let records_after_fault = unlocked.authenticated_cleanup_workspaces().unwrap();
+            assert!(
+                records_after_fault.is_empty()
+                    || (records_after_fault.len() == 1
+                        && records_after_fault[0].state()
+                            == crate::CleanupWorkspaceState::Registered)
+            );
+
+            unlocked
+                .commit_cleanup_workspace_registration(&mut registration)
+                .unwrap();
+            assert_eq!(
+                unlocked.authenticated_cleanup_workspaces().unwrap().len(),
+                1
+            );
+            assert!(
+                store
+                    .layout
+                    .cleanup_staging
+                    .entry_names_bounded(1)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_registration_source_sync_fault_is_recoverable_after_store_reopen() {
+        let repository = TempDir::new().unwrap();
+        let local = TempDir::new().unwrap();
+        let repository_path = repository.path().canonicalize().unwrap();
+        let local_path = local.path().canonicalize().unwrap();
+        let vault = VaultId::from_bytes([0xb5; 16]);
+        let store =
+            Arc::new(VaultStore::create_empty(&repository_path, &local_path, vault).unwrap());
+        let root = VaultRootKey::generate(&mut FixedRandom(0xb6)).unwrap();
+        let keys = KeyCell::new(root).unwrap();
+        let generation = keys.generation();
+        let unlocked = UnlockedVault {
+            store: Arc::clone(&store),
+            keys: Arc::new(keys),
+            generation,
+            workspace_absence_authority: None,
+            verified_chunks: Arc::new(Mutex::new(HashMap::new())),
+            stamp_cache_policy: Arc::new(StampCachePolicy::new()),
+            authenticated_bootstrap: None,
+        }
+        .with_workspace_absence_authority(WorkspaceAbsenceAuthority::new(Arc::new(AlwaysAbsent)));
+        let mut registration = unlocked.prepare_cleanup_workspace_registration().unwrap();
+        install_registration_persistence_fault(RegistrationPersistenceFault::SourceDirectorySync);
+        assert!(matches!(
+            unlocked.commit_cleanup_workspace_registration(&mut registration),
+            Err(StoreError::Io(_))
+        ));
+        drop(registration);
+        drop(unlocked);
+        drop(store);
+
+        let reopened =
+            Arc::new(VaultStore::open_existing(&repository_path, &local_path, vault).unwrap());
+        let root = VaultRootKey::generate(&mut FixedRandom(0xb6)).unwrap();
+        let keys = KeyCell::new(root).unwrap();
+        let unlocked = UnlockedVault {
+            store: Arc::clone(&reopened),
+            keys: Arc::new(keys),
+            generation,
+            workspace_absence_authority: None,
+            verified_chunks: Arc::new(Mutex::new(HashMap::new())),
+            stamp_cache_policy: Arc::new(StampCachePolicy::new()),
+            authenticated_bootstrap: None,
+        }
+        .with_workspace_absence_authority(WorkspaceAbsenceAuthority::new(Arc::new(AlwaysAbsent)));
+
+        assert_eq!(
+            unlocked.authenticated_cleanup_workspaces().unwrap().len(),
+            1
+        );
+        let _next = unlocked.prepare_cleanup_workspace_registration().unwrap();
+        assert!(
+            reopened
+                .layout
+                .cleanup_staging
+                .entry_names_bounded(1)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

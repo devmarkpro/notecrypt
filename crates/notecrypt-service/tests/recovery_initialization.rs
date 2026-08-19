@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use notecrypt_service::{
@@ -48,6 +48,10 @@ impl WorkspaceProvider for UnavailableWorkspace {
     ) -> Result<WorkspaceLease, HostPortError> {
         Err(HostPortError::Unavailable)
     }
+
+    fn confirm_activated(&self, _lease: &WorkspaceLease) -> Result<(), HostPortError> {
+        Ok(())
+    }
     fn materialization_target(
         &self,
         _lease: &WorkspaceLease,
@@ -59,13 +63,13 @@ impl WorkspaceProvider for UnavailableWorkspace {
         &self,
         _lease: &WorkspaceLease,
         _target: notecrypt_service::MaterializationTarget,
-    ) -> Result<notecrypt_service::PublishedGeneration, HostPortError> {
+    ) -> Result<notecrypt_service::MaterializationPublication, HostPortError> {
         Err(HostPortError::Unavailable)
     }
     fn arm_published_path(
         &self,
         _lease: &WorkspaceLease,
-        _published: notecrypt_service::PublishedGeneration,
+        _published: &mut notecrypt_service::PublishedGeneration,
     ) -> Result<(), HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -92,7 +96,7 @@ impl WorkspaceProvider for UnavailableWorkspace {
     }
     fn remove_workspace(
         &self,
-        _lease: WorkspaceLease,
+        _lease: &WorkspaceLease,
     ) -> Result<Box<dyn notecrypt_service::WorkspaceAbsenceGuard>, HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -122,6 +126,28 @@ impl OperationExecutor for RejectingExecutor {
     }
 }
 
+struct LockCompletionObserver {
+    completed: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl OperationExecutor for LockCompletionObserver {
+    fn execute(
+        &self,
+        _command: Command,
+        _context: &OperationContext,
+    ) -> Result<OperationResult, ServiceError> {
+        Err(ServiceError::ExecutorFailed)
+    }
+
+    fn control(&self, control: notecrypt_service::Control) {
+        if control == notecrypt_service::Control::LockNow
+            && let Some(completed) = self.completed.lock().unwrap().take()
+        {
+            completed.send(()).expect("lock observer remains alive");
+        }
+    }
+}
+
 fn target(repository: &TempDir, local: &TempDir) -> LocalVaultConfig {
     LocalVaultConfig::try_new(
         repository.path().canonicalize().unwrap(),
@@ -133,6 +159,14 @@ fn target(repository: &TempDir, local: &TempDir) -> LocalVaultConfig {
 }
 
 fn service(repository: &TempDir, local: &TempDir) -> ServiceHandle {
+    service_with_executor(repository, local, Arc::new(RejectingExecutor))
+}
+
+fn service_with_executor(
+    repository: &TempDir,
+    local: &TempDir,
+    executor: Arc<dyn OperationExecutor>,
+) -> ServiceHandle {
     let workspace: Arc<dyn WorkspaceProvider> = Arc::new(UnavailableWorkspace);
     let repository = StoreVaultRepository::vacant(
         target(repository, local),
@@ -153,7 +187,7 @@ fn service(repository: &TempDir, local: &TempDir) -> ServiceHandle {
     );
     ServiceHandle::with_local_use_cases(
         ServiceConfig::default(),
-        Arc::new(RejectingExecutor),
+        executor,
         Arc::new(notecrypt_service::OsOperationIdRandom),
         components,
     )
@@ -287,7 +321,14 @@ fn cancellation_after_active_commit_returns_success_and_installs_repository() {
     let _guard = initialization_test_guard();
     let repository = TempDir::new().unwrap();
     let local = TempDir::new().unwrap();
-    let service = service(&repository, &local);
+    let (completed_sender, completed_receiver) = mpsc::channel();
+    let service = service_with_executor(
+        &repository,
+        &local,
+        Arc::new(LockCompletionObserver {
+            completed: Mutex::new(Some(completed_sender)),
+        }),
+    );
     let (pending, presentation) = service
         .begin_recovery_initialization(BeginRecoveryInitialization::generated())
         .unwrap();
@@ -309,9 +350,27 @@ fn cancellation_after_active_commit_returns_success_and_installs_repository() {
     let summary = service
         .confirm_recovery_initialization(pending, secret(&captured.lock().unwrap()))
         .unwrap();
-    let unlocked = service
-        .unlock_with_recovery(secret(&captured.lock().unwrap()))
-        .unwrap();
+    let observer_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    completed_receiver
+        .recv_timeout(observer_deadline.saturating_duration_since(std::time::Instant::now()))
+        .expect("lock observer runs after root close and cleanup");
+    let locked = service.snapshot();
+    assert_eq!(
+        locked.session_state(),
+        notecrypt_service::SessionState::Locked
+    );
+    assert!(!locked.accepting_operations());
+    assert!(!locked.key_leases_open());
+    let unlocked = loop {
+        match service.unlock_with_recovery(secret(&captured.lock().unwrap())) {
+            Ok(unlocked) => break unlocked,
+            Err(ServiceError::Locked) => assert!(
+                std::time::Instant::now() < observer_deadline,
+                "unlock admission remained reserved after the lock observer completed"
+            ),
+            Err(error) => panic!("unexpected unlock error after lock completion: {error:?}"),
+        }
+    };
     assert_eq!(summary.vault_id(), unlocked.vault_id());
 }
 

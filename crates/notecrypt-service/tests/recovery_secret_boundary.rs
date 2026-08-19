@@ -111,6 +111,10 @@ impl WorkspaceProvider for UnavailableWorkspace {
         Err(HostPortError::Unavailable)
     }
 
+    fn confirm_activated(&self, _lease: &WorkspaceLease) -> Result<(), HostPortError> {
+        Ok(())
+    }
+
     fn materialization_target(
         &self,
         _lease: &WorkspaceLease,
@@ -123,14 +127,14 @@ impl WorkspaceProvider for UnavailableWorkspace {
         &self,
         _lease: &WorkspaceLease,
         _target: notecrypt_service::MaterializationTarget,
-    ) -> Result<notecrypt_service::PublishedGeneration, HostPortError> {
+    ) -> Result<notecrypt_service::MaterializationPublication, HostPortError> {
         Err(HostPortError::Unavailable)
     }
 
     fn arm_published_path(
         &self,
         _lease: &WorkspaceLease,
-        _published: notecrypt_service::PublishedGeneration,
+        _published: &mut notecrypt_service::PublishedGeneration,
     ) -> Result<(), HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -161,7 +165,7 @@ impl WorkspaceProvider for UnavailableWorkspace {
 
     fn remove_workspace(
         &self,
-        _lease: WorkspaceLease,
+        _lease: &WorkspaceLease,
     ) -> Result<Box<dyn notecrypt_service::WorkspaceAbsenceGuard>, HostPortError> {
         Err(HostPortError::Unavailable)
     }

@@ -42,12 +42,13 @@ crossterm = "0.29"
 getrandom = "0.3"
 hkdf = "0.12"
 keyring = { version = "3.6", default-features = false }
+libc = "0.2"
 minicbor = { version = "0.26", features = ["alloc"] }
 notify = "8.2"
 proptest = "1.7"
 ratatui = "0.29"
 rpassword = "7.4"
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
 secrecy = "0.10"
 serde = "1.0"
 serde_json = "1.0"

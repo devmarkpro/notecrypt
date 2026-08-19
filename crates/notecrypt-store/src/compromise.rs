@@ -181,12 +181,20 @@ impl CompromiseRekeySource for RepositoryCompromiseSource {
         self.lease
             .validate_current_head_commitment(&self.source_head)?;
         let result = match entry.kind {
-            AuthenticatedLogicalKind::File { revision } => self.lease.export_exact(
-                FileId::from_bytes(*entry.source_id.as_bytes()),
-                revision,
-                output,
-                cancel,
-            ),
+            AuthenticatedLogicalKind::File { revision } => {
+                #[cfg(feature = "test-support")]
+                let output = &mut FirstPlaintextWriteHook {
+                    inner: output,
+                    vault: self.lease.vault_id(),
+                    fired: false,
+                } as &mut dyn Write;
+                self.lease.export_exact(
+                    FileId::from_bytes(*entry.source_id.as_bytes()),
+                    revision,
+                    output,
+                    cancel,
+                )
+            }
             AuthenticatedLogicalKind::Root | AuthenticatedLogicalKind::Directory => {
                 if cancel.load(Ordering::Acquire) {
                     return Err(StoreError::Cancelled);
@@ -201,6 +209,69 @@ impl CompromiseRekeySource for RepositoryCompromiseSource {
 }
 
 impl sealed::CompromiseRekeySource for RepositoryCompromiseSource {}
+
+#[cfg(feature = "test-support")]
+struct FirstPlaintextWriteHook<'a> {
+    inner: &'a mut dyn Write,
+    vault: VaultId,
+    fired: bool,
+}
+
+#[cfg(feature = "test-support")]
+impl Write for FirstPlaintextWriteHook<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        if written != 0 && !self.fired {
+            self.fired = true;
+            test_support::run_after_first_plaintext_write_hook(self.vault);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::sync::Mutex;
+
+    use notecrypt_core::VaultId;
+
+    type Hook = Box<dyn FnOnce() + Send>;
+
+    static AFTER_FIRST_PLAINTEXT_WRITE: Mutex<Vec<(VaultId, Hook)>> = Mutex::new(Vec::new());
+
+    pub fn install_after_first_plaintext_write_hook(
+        vault: VaultId,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        let mut hooks = AFTER_FIRST_PLAINTEXT_WRITE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            hooks.iter().all(|(installed, _)| *installed != vault),
+            "plaintext-write hook was already installed for this vault"
+        );
+        hooks.push((vault, Box::new(hook)));
+    }
+
+    pub(super) fn run_after_first_plaintext_write_hook(vault: VaultId) {
+        let hook = {
+            let mut hooks = AFTER_FIRST_PLAINTEXT_WRITE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            hooks
+                .iter()
+                .position(|(installed, _)| *installed == vault)
+                .map(|index| hooks.swap_remove(index).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
 
 fn order_live_entries(
     source_root: RepositoryEntryId,
@@ -1013,6 +1084,7 @@ fn reject_source_target_alias(
         &source.layout.trusted,
         &source.layout.trusted_remote,
         &source.layout.cleanup_registry,
+        &source.layout.cleanup_staging,
         &source.layout.device_slots,
         &source.layout.quarantine,
     ];
@@ -1249,12 +1321,13 @@ fn cleanup_local(local: &Directory, vault: VaultId) -> Result<(), StoreError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(StoreError::from(error)),
     };
-    for name in vault_directory.entry_names_bounded(7)? {
+    for name in vault_directory.entry_names_bounded(8)? {
         match name.as_str() {
             "journal"
             | "trusted"
             | "trusted-remote"
             | "cleanup-registry"
+            | "cleanup-staging"
             | "device-slots"
             | "replication-quarantine" => {
                 cleanup_private_local_directory(&vault_directory, &name)?;
@@ -1343,7 +1416,7 @@ mod tests {
         for id in [first, second] {
             let encoded = encode_hex(id.as_bytes());
             shard
-                .create_file_new(&component(&encoded[2..]).unwrap())
+                .create_private_file_new(&component(&encoded[2..]).unwrap())
                 .unwrap();
         }
 
@@ -1366,7 +1439,7 @@ mod tests {
             id[0] = shard_byte;
             let encoded = encode_hex(&id);
             shard
-                .create_file_new(&component(&encoded[2..]).unwrap())
+                .create_private_file_new(&component(&encoded[2..]).unwrap())
                 .unwrap();
         }
 

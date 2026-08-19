@@ -17,14 +17,16 @@ use crate::VaultPublicationGuard;
 pub const MAX_STABLE_SOURCE_TOKEN_BYTES: usize = 256;
 /// Maximum native credential-store reference retained by the service.
 pub const MAX_DEVICE_KEY_REFERENCE_BYTES: usize = 2 * 1024;
-/// Maximum logical paths tracked for collision detection in one workspace.
-pub const MAX_WORKSPACE_PATHS: usize = 1_000_000;
-/// Maximum aggregate collision-key and normalized identity bytes per workspace.
-pub const MAX_WORKSPACE_COLLISION_KEY_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum raw UTF-8 bytes accepted for one logical path component.
 pub const MAX_LOGICAL_COMPONENT_BYTES: usize = 1_024;
 /// Maximum component depth accepted for one logical workspace path.
 pub const MAX_LOGICAL_PATH_DEPTH: usize = 16;
+/// Maximum logical paths tracked and physically materialized in one workspace.
+pub const MAX_WORKSPACE_PATHS: usize = 1_000_000;
+/// Maximum physical directories, files, and live staging entries in one workspace.
+pub const MAX_WORKSPACE_PHYSICAL_ENTRIES: usize = 1_000_000;
+/// Maximum aggregate collision-key and normalized identity bytes per workspace.
+pub const MAX_WORKSPACE_COLLISION_KEY_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum raw UTF-8 bytes accepted for one logical workspace path.
 pub const MAX_LOGICAL_PATH_BYTES: usize =
     MAX_LOGICAL_PATH_DEPTH * MAX_LOGICAL_COMPONENT_BYTES + MAX_LOGICAL_PATH_DEPTH - 1;
@@ -222,19 +224,19 @@ pub enum HostPortError {
     PlatformFailure,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static ALLOCATION_FAILURE_COUNTDOWN: std::cell::Cell<Option<usize>> = const {
         std::cell::Cell::new(None)
     };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn inject_allocation_failure_after_for_test(successful_reservations: usize) {
     ALLOCATION_FAILURE_COUNTDOWN.set(Some(successful_reservations));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn allocation_failure_injected_for_test() -> bool {
     ALLOCATION_FAILURE_COUNTDOWN.with(|countdown| match countdown.get() {
         Some(0) => {
@@ -249,7 +251,7 @@ pub(crate) fn allocation_failure_injected_for_test() -> bool {
     })
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) const fn allocation_failure_injected_for_test() -> bool {
     false
 }
@@ -349,33 +351,62 @@ pub(crate) fn try_rehome_path(
     try_rehome_os_string(source.into_os_string(), maximum_bytes).map(PathBuf::from)
 }
 
+fn try_copy_path(value: &Path, maximum_bytes: usize) -> Result<PathBuf, HostPortError> {
+    let length = encoded_len(value.as_os_str());
+    if length > maximum_bytes {
+        return Err(HostPortError::CapacityExceeded);
+    }
+    let mut retained = OsString::new();
+    if allocation_failure_injected_for_test() {
+        return Err(HostPortError::AllocationFailed);
+    }
+    retained
+        .try_reserve_exact(length)
+        .map_err(|_| HostPortError::AllocationFailed)?;
+    retained.push(value.as_os_str());
+    Ok(PathBuf::from(retained))
+}
+
 /// Store-issued opaque identity for one Notecrypt-owned workspace.
 pub struct WorkspaceId {
-    child_name: String,
+    child_name: [u8; 32],
 }
 
 impl WorkspaceId {
     pub(crate) fn from_store(value: &CleanupWorkspaceId) -> Result<Self, HostPortError> {
-        let child_name = value.child_name();
-        if child_name.len() != 32
-            || !child_name
-                .as_bytes()
-                .iter()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            return Err(HostPortError::InvalidInput);
+        let mut child_name = [0_u8; 32];
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for (index, byte) in value.as_bytes().iter().copied().enumerate() {
+            child_name[index * 2] = HEX[usize::from(byte >> 4)];
+            child_name[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
         }
-        let child_name = try_rehome_string(child_name, 32)?;
         Ok(Self { child_name })
     }
 
     /// Returns the exact direct child name reserved by the store.
     pub fn child_name(&self) -> &str {
-        &self.child_name
+        std::str::from_utf8(&self.child_name)
+            .expect("workspace IDs are constructed only from lowercase ASCII hex")
     }
 
-    pub(crate) fn try_duplicate(&self) -> Result<Self, HostPortError> {
-        let child_name = try_copy_str(&self.child_name, 32)?;
+    pub(crate) const fn duplicate(&self) -> Self {
+        Self {
+            child_name: self.child_name,
+        }
+    }
+
+    pub(crate) const fn try_duplicate(&self) -> Result<Self, HostPortError> {
+        Ok(self.duplicate())
+    }
+
+    #[cfg(feature = "test-support")]
+    fn from_test_bytes(bytes: [u8; 16]) -> Result<Self, HostPortError> {
+        let mut child_name = [0_u8; 32];
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for (index, byte) in bytes.into_iter().enumerate() {
+            child_name[index * 2] = HEX[usize::from(byte >> 4)];
+            child_name[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
+        }
         Ok(Self { child_name })
     }
 }
@@ -391,7 +422,12 @@ pub enum WorkspaceMode {
 pub trait WorkspaceOwnershipGuard: Send {}
 
 /// Held physical-absence evidence transferred into the store authority bridge.
-pub trait WorkspaceAbsenceGuard: Send {}
+/// Dropping the guard must leave retry-discoverable provider state and must never finalize it.
+pub trait WorkspaceAbsenceGuard: Send {
+    /// Releases provider-owned absence infrastructure after authenticated unregister succeeds.
+    /// A failure leaves the guard retryable and must retain physical-absence ordering.
+    fn finalize(&mut self) -> Result<(), HostPortError>;
+}
 
 /// One owned plaintext workspace below the provider's fixed base.
 pub struct WorkspaceLease {
@@ -747,19 +783,37 @@ impl Drop for StableSourceToken {
     }
 }
 
-/// Adapter-selected private staging and final materialization paths.
+/// Opaque adapter-issued identity for one exact staged materialization.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MaterializationId([u8; 16]);
+
+impl MaterializationId {
+    pub const fn from_random_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+/// Adapter-created private staging writer and final publication binding.
 pub struct MaterializationTarget {
+    id: MaterializationId,
     staging_path: PathBuf,
     destination: PathBuf,
     suppression: SuppressionToken,
+    writer: Box<dyn Write + Send>,
 }
 
 impl MaterializationTarget {
     pub fn new(
         lease: &WorkspaceLease,
+        id: MaterializationId,
         staging_path: PathBuf,
         destination: PathBuf,
         suppression: SuppressionToken,
+        writer: Box<dyn Write + Send>,
     ) -> Result<Self, HostPortError> {
         if !valid_workspace_child(lease, &staging_path)
             || !valid_workspace_child(lease, &destination)
@@ -770,10 +824,20 @@ impl MaterializationTarget {
         let staging_path = try_rehome_path(staging_path, MAX_NATIVE_PATH_BYTES)?;
         let destination = try_rehome_path(destination, MAX_NATIVE_PATH_BYTES)?;
         Ok(Self {
+            id,
             staging_path,
             destination,
             suppression,
+            writer,
         })
+    }
+
+    pub const fn id(&self) -> MaterializationId {
+        self.id
+    }
+
+    pub fn writer_mut(&mut self) -> &mut (dyn Write + Send) {
+        self.writer.as_mut()
     }
 
     pub fn staging_path(&self) -> &Path {
@@ -787,29 +851,69 @@ impl MaterializationTarget {
     pub const fn suppression(&self) -> &SuppressionToken {
         &self.suppression
     }
+
+    pub fn flush(&mut self) -> Result<(), HostPortError> {
+        self.writer
+            .flush()
+            .map_err(|_| HostPortError::PlatformFailure)
+    }
 }
 
 /// One atomically published workspace generation awaiting watcher arming.
 pub struct PublishedGeneration {
+    id: MaterializationId,
     path: PathBuf,
     generation: u64,
     suppression: SuppressionToken,
+    guard: Option<Box<dyn PublishedWorkspaceGuard>>,
+    armed: bool,
 }
 
-impl PublishedGeneration {
+/// Adapter-owned lifetime guard retained from publication through watcher arming.
+pub trait PublishedWorkspaceGuard: Send {}
+
+/// Linear retry authority for a visible publication whose durability is not yet proven.
+pub struct PendingPublishedGeneration {
+    id: MaterializationId,
+    path: PathBuf,
+    published_path: Option<PathBuf>,
+    generation: u64,
+    suppression: SuppressionToken,
+    guard: Option<Box<dyn PublishedWorkspaceGuard>>,
+    spent: bool,
+}
+
+/// Exact outcome of an atomic materialization publication attempt.
+pub enum MaterializationPublication {
+    Durable(PublishedGeneration),
+    DurabilityPending(PendingPublishedGeneration),
+}
+
+impl PendingPublishedGeneration {
     pub fn from_materialization(
         lease: &WorkspaceLease,
-        target: MaterializationTarget,
+        target: &MaterializationTarget,
         generation: u64,
+        guard: Box<dyn PublishedWorkspaceGuard>,
     ) -> Result<Self, HostPortError> {
         if !valid_workspace_child(lease, &target.destination) || generation == 0 {
             return Err(HostPortError::InvalidInput);
         }
+        let path = try_copy_path(&target.destination, MAX_NATIVE_PATH_BYTES)?;
+        let published_path = try_copy_path(&target.destination, MAX_NATIVE_PATH_BYTES)?;
         Ok(Self {
-            path: target.destination,
+            id: target.id,
+            path,
+            published_path: Some(published_path),
             generation,
-            suppression: target.suppression,
+            suppression: SuppressionToken::from_random_bytes(*target.suppression.as_bytes()),
+            guard: Some(guard),
+            spent: false,
         })
+    }
+
+    pub const fn id(&self) -> MaterializationId {
+        self.id
     }
 
     pub fn path(&self) -> &Path {
@@ -823,50 +927,106 @@ impl PublishedGeneration {
     pub const fn suppression(&self) -> &SuppressionToken {
         &self.suppression
     }
+
+    pub const fn is_spent(&self) -> bool {
+        self.spent
+    }
+
+    pub fn spend(&mut self, lease: &WorkspaceLease) -> Result<PublishedGeneration, HostPortError> {
+        if self.spent || !valid_workspace_child(lease, &self.path) {
+            return Err(HostPortError::StaleCapability);
+        }
+        let path = self
+            .published_path
+            .take()
+            .ok_or(HostPortError::StaleCapability)?;
+        let guard = self.guard.take().ok_or(HostPortError::StaleCapability)?;
+        self.spent = true;
+        Ok(PublishedGeneration {
+            id: self.id,
+            path,
+            generation: self.generation,
+            suppression: SuppressionToken::from_random_bytes(*self.suppression.as_bytes()),
+            guard: Some(guard),
+            armed: false,
+        })
+    }
+}
+
+impl PublishedGeneration {
+    pub fn from_materialization(
+        lease: &WorkspaceLease,
+        target: MaterializationTarget,
+        generation: u64,
+        guard: Box<dyn PublishedWorkspaceGuard>,
+    ) -> Result<Self, HostPortError> {
+        if !valid_workspace_child(lease, &target.destination) || generation == 0 {
+            return Err(HostPortError::InvalidInput);
+        }
+        Ok(Self {
+            id: target.id,
+            path: target.destination,
+            generation,
+            suppression: target.suppression,
+            guard: Some(guard),
+            armed: false,
+        })
+    }
+
+    pub const fn id(&self) -> MaterializationId {
+        self.id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn suppression(&self) -> &SuppressionToken {
+        &self.suppression
+    }
+
+    pub const fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    pub fn mark_armed(&mut self) -> Result<(), HostPortError> {
+        if self.armed || self.guard.is_none() {
+            return Err(HostPortError::StaleCapability);
+        }
+        self.guard.take();
+        self.armed = true;
+        Ok(())
+    }
 }
 
 /// Bounded editor process request.
 pub struct EditorLaunchRequest {
-    executable: OsString,
-    arguments: Vec<OsString>,
+    workspace_id: WorkspaceId,
+    resolution: EditorResolutionRequest,
     workspace_file: PathBuf,
+    process_generation: u64,
 }
 
-impl EditorLaunchRequest {
-    pub fn try_new(
-        lease: &WorkspaceLease,
-        executable: OsString,
-        arguments: Vec<OsString>,
-        workspace_file: PathBuf,
-    ) -> Result<Self, HostPortError> {
-        if executable.is_empty()
-            || encoded_len(&executable) > MAX_EDITOR_ARGUMENT_BYTES
-            || executable.as_encoded_bytes().contains(&0)
-            || arguments.len() > MAX_EDITOR_ARGUMENTS
-            || !valid_editor_workspace(lease, &workspace_file)
-        {
-            return Err(HostPortError::InvalidInput);
-        }
-        let mut aggregate = encoded_len(&executable)
-            .checked_add(encoded_len(workspace_file.as_os_str()))
-            .and_then(|value| value.checked_add(1))
-            .ok_or(HostPortError::CapacityExceeded)?;
-        if aggregate > MAX_EDITOR_COMMAND_BYTES {
-            return Err(HostPortError::CapacityExceeded);
-        }
-        for argument in &arguments {
-            let length = encoded_len(argument);
-            if length > MAX_EDITOR_ARGUMENT_BYTES || argument.as_encoded_bytes().contains(&0) {
-                return Err(HostPortError::CapacityExceeded);
-            }
-            aggregate = aggregate
-                .checked_add(length)
-                .and_then(|value| value.checked_add(1))
-                .ok_or(HostPortError::CapacityExceeded)?;
-            if aggregate > MAX_EDITOR_COMMAND_BYTES {
-                return Err(HostPortError::CapacityExceeded);
-            }
-        }
+/// Whether completion alone is sufficient or the editor tree must be owned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorSupervisionMode {
+    Blocking,
+    Strict,
+}
+
+/// Bounded, already-tokenized editor command owned by the service contract.
+pub struct EditorCommand {
+    executable: OsString,
+    arguments: Vec<OsString>,
+}
+
+impl EditorCommand {
+    pub fn try_new(executable: OsString, arguments: Vec<OsString>) -> Result<Self, HostPortError> {
+        validate_editor_parts(&executable, &arguments, 0, 0)?;
         let executable = try_rehome_os_string(executable, MAX_EDITOR_ARGUMENT_BYTES)?;
         let mut retained_arguments = Vec::new();
         retained_arguments
@@ -875,11 +1035,9 @@ impl EditorLaunchRequest {
         for argument in arguments {
             retained_arguments.push(try_rehome_os_string(argument, MAX_EDITOR_ARGUMENT_BYTES)?);
         }
-        let workspace_file = try_rehome_path(workspace_file, MAX_NATIVE_PATH_BYTES)?;
         Ok(Self {
             executable,
             arguments: retained_arguments,
-            workspace_file,
         })
     }
 
@@ -891,8 +1049,147 @@ impl EditorLaunchRequest {
         &self.arguments
     }
 
+    pub fn into_parts(self) -> (OsString, Vec<OsString>) {
+        (self.executable, self.arguments)
+    }
+
+    pub fn validate_workspace_argument(&self, workspace_file: &Path) -> Result<(), HostPortError> {
+        let workspace_length = encoded_len(workspace_file.as_os_str());
+        if workspace_length > MAX_EDITOR_ARGUMENT_BYTES {
+            return Err(HostPortError::CapacityExceeded);
+        }
+        let workspace_bytes = workspace_length
+            .checked_add(1)
+            .ok_or(HostPortError::CapacityExceeded)?;
+        validate_editor_parts(&self.executable, &self.arguments, workspace_bytes, 1)
+    }
+}
+
+/// Bounded precedence inputs for adapter editor resolution.
+pub struct EditorResolutionRequest {
+    explicit: Option<EditorCommand>,
+    visual: Option<OsString>,
+    editor: Option<OsString>,
+    mode: EditorSupervisionMode,
+}
+
+impl EditorResolutionRequest {
+    pub fn try_new(
+        explicit: Option<EditorCommand>,
+        visual: Option<OsString>,
+        editor: Option<OsString>,
+        mode: EditorSupervisionMode,
+    ) -> Result<Self, HostPortError> {
+        let visual = visual.map(validate_environment_editor).transpose()?;
+        let editor = editor.map(validate_environment_editor).transpose()?;
+        Ok(Self {
+            explicit,
+            visual,
+            editor,
+            mode,
+        })
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        Option<EditorCommand>,
+        Option<OsString>,
+        Option<OsString>,
+        EditorSupervisionMode,
+    ) {
+        (self.explicit, self.visual, self.editor, self.mode)
+    }
+}
+
+fn validate_environment_editor(value: OsString) -> Result<OsString, HostPortError> {
+    if value.is_empty() || value.as_encoded_bytes().contains(&0) {
+        return Err(HostPortError::InvalidInput);
+    }
+    if encoded_len(&value) > MAX_EDITOR_ARGUMENT_BYTES {
+        return Err(HostPortError::CapacityExceeded);
+    }
+    try_rehome_os_string(value, MAX_EDITOR_ARGUMENT_BYTES)
+}
+
+fn validate_editor_parts(
+    executable: &OsStr,
+    arguments: &[OsString],
+    extra_bytes: usize,
+    extra_arguments: usize,
+) -> Result<(), HostPortError> {
+    if executable.is_empty() || executable.as_encoded_bytes().contains(&0) {
+        return Err(HostPortError::InvalidInput);
+    }
+    if encoded_len(executable) > MAX_EDITOR_ARGUMENT_BYTES
+        || arguments
+            .len()
+            .checked_add(extra_arguments)
+            .is_none_or(|count| count > MAX_EDITOR_ARGUMENTS)
+    {
+        return Err(HostPortError::CapacityExceeded);
+    }
+    let mut aggregate = encoded_len(executable)
+        .checked_add(extra_bytes)
+        .ok_or(HostPortError::CapacityExceeded)?;
+    for argument in arguments {
+        let length = encoded_len(argument);
+        if argument.as_encoded_bytes().contains(&0) {
+            return Err(HostPortError::InvalidInput);
+        }
+        if length > MAX_EDITOR_ARGUMENT_BYTES {
+            return Err(HostPortError::CapacityExceeded);
+        }
+        aggregate = aggregate
+            .checked_add(length)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(HostPortError::CapacityExceeded)?;
+    }
+    if aggregate > MAX_EDITOR_COMMAND_BYTES {
+        return Err(HostPortError::CapacityExceeded);
+    }
+    Ok(())
+}
+
+impl EditorLaunchRequest {
+    pub fn try_new(
+        lease: &WorkspaceLease,
+        resolution: EditorResolutionRequest,
+        workspace_file: PathBuf,
+        process_generation: u64,
+    ) -> Result<Self, HostPortError> {
+        if !valid_editor_workspace(lease, &workspace_file) || process_generation == 0 {
+            return Err(HostPortError::InvalidInput);
+        }
+        let workspace_file = try_rehome_path(workspace_file, MAX_NATIVE_PATH_BYTES)?;
+        Ok(Self {
+            workspace_id: lease.id().try_duplicate()?,
+            resolution,
+            workspace_file,
+            process_generation,
+        })
+    }
+
     pub fn workspace_file(&self) -> &Path {
         &self.workspace_file
+    }
+
+    pub fn workspace_id(&self) -> &WorkspaceId {
+        &self.workspace_id
+    }
+
+    pub const fn process_generation(&self) -> u64 {
+        self.process_generation
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (WorkspaceId, EditorResolutionRequest, PathBuf, u64) {
+        (
+            self.workspace_id,
+            self.resolution,
+            self.workspace_file,
+            self.process_generation,
+        )
     }
 }
 
@@ -1162,6 +1459,7 @@ pub trait WorkspaceProvider: Send + Sync {
         &self,
         request: VaultWorkspaceRequest,
     ) -> Result<WorkspaceLease, HostPortError>;
+    fn confirm_activated(&self, lease: &WorkspaceLease) -> Result<(), HostPortError>;
     fn materialization_target(
         &self,
         lease: &WorkspaceLease,
@@ -1171,11 +1469,18 @@ pub trait WorkspaceProvider: Send + Sync {
         &self,
         lease: &WorkspaceLease,
         target: MaterializationTarget,
-    ) -> Result<PublishedGeneration, HostPortError>;
+    ) -> Result<MaterializationPublication, HostPortError>;
+    fn confirm_materialized(
+        &self,
+        _lease: &WorkspaceLease,
+        _pending: &mut PendingPublishedGeneration,
+    ) -> Result<PublishedGeneration, HostPortError> {
+        Err(HostPortError::Unavailable)
+    }
     fn arm_published_path(
         &self,
         lease: &WorkspaceLease,
-        published: PublishedGeneration,
+        published: &mut PublishedGeneration,
     ) -> Result<(), HostPortError>;
     fn watch(&self, lease: &WorkspaceLease) -> Result<Box<dyn WorkspaceWatch>, HostPortError>;
     fn open_stable_source(
@@ -1191,7 +1496,7 @@ pub trait WorkspaceProvider: Send + Sync {
     ) -> Result<(), HostPortError>;
     fn remove_workspace(
         &self,
-        lease: WorkspaceLease,
+        lease: &WorkspaceLease,
     ) -> Result<Box<dyn WorkspaceAbsenceGuard>, HostPortError>;
     fn acquire_verified_absence(
         &self,
@@ -1234,6 +1539,57 @@ impl crate::VaultPublicationGuard for StableSourcePublicationGuard<'_> {
 pub trait EditorSupervisor: Send + Sync {
     fn launch(&self, request: EditorLaunchRequest)
     -> Result<Box<dyn EditorProcess>, HostPortError>;
+    fn request_stop_all(&self) -> Result<(), HostPortError>;
+    fn poll_quiescence(&self) -> Result<EditorQuiescence, HostPortError>;
+    fn force_stop_all(&self) -> Result<(), HostPortError>;
+}
+
+pub(crate) struct UnavailableEditorSupervisor;
+
+impl EditorSupervisor for UnavailableEditorSupervisor {
+    fn launch(
+        &self,
+        _request: EditorLaunchRequest,
+    ) -> Result<Box<dyn EditorProcess>, HostPortError> {
+        Err(HostPortError::Unavailable)
+    }
+
+    fn request_stop_all(&self) -> Result<(), HostPortError> {
+        Ok(())
+    }
+
+    fn poll_quiescence(&self) -> Result<EditorQuiescence, HostPortError> {
+        Ok(EditorQuiescence::new(0, 0))
+    }
+
+    fn force_stop_all(&self) -> Result<(), HostPortError> {
+        Ok(())
+    }
+}
+
+/// Allocation-free process-registry state sampled by lock orchestration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditorQuiescence {
+    active: usize,
+    unreaped: usize,
+}
+
+impl EditorQuiescence {
+    pub const fn new(active: usize, unreaped: usize) -> Self {
+        Self { active, unreaped }
+    }
+
+    pub const fn active(self) -> usize {
+        self.active
+    }
+
+    pub const fn unreaped(self) -> usize {
+        self.unreaped
+    }
+
+    pub const fn is_quiescent(self) -> bool {
+        self.active == 0 && self.unreaped == 0
+    }
 }
 
 pub trait EditorProcess: Send {
@@ -1246,6 +1602,32 @@ pub trait DeviceUnlockProvider: Send + Sync {
     fn enroll(&self, vault: VaultId) -> Result<EnrolledDeviceKey, HostPortError>;
     fn unlock(&self, reference: &DeviceKeyReference) -> Result<DeviceUnlockSecret, HostPortError>;
     fn remove(&self, reference: &DeviceKeyReference) -> Result<(), HostPortError>;
+}
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod workspace_test_support {
+    use std::path::PathBuf;
+
+    use notecrypt_core::VaultId;
+
+    use super::{HostPortError, TargetWorkspaceRequest, WorkspaceId};
+
+    pub fn inject_allocation_failure_after(successful_reservations: usize) {
+        super::inject_allocation_failure_after_for_test(successful_reservations);
+    }
+
+    pub fn target_request(
+        id: [u8; 16],
+        vault: [u8; 16],
+        repository_root: PathBuf,
+    ) -> Result<TargetWorkspaceRequest, HostPortError> {
+        TargetWorkspaceRequest::new(
+            WorkspaceId::from_test_bytes(id)?,
+            VaultId::from_bytes(vault),
+            repository_root,
+        )
+    }
 }
 
 /// Checkpoint-A provider that always requires recovery unlock.
@@ -1271,6 +1653,9 @@ mod capacity_tests {
 
     struct Ownership;
     impl WorkspaceOwnershipGuard for Ownership {}
+
+    struct PublishedGuard;
+    impl PublishedWorkspaceGuard for PublishedGuard {}
 
     fn workspace_id(byte: u8) -> WorkspaceId {
         WorkspaceId::from_store(&notecrypt_store::cleanup_test_support::workspace_id(
@@ -1348,7 +1733,7 @@ mod capacity_tests {
         assert!(logical.path.capacity() <= MAX_LOGICAL_PATH_BYTES);
 
         let id = workspace_id(1);
-        assert!(id.child_name.capacity() <= 32);
+        assert_eq!(id.child_name().len(), 32);
         let mut root = PathBuf::with_capacity(1_000_000);
         root.push(std::env::temp_dir());
         root.push(id.child_name());
@@ -1384,15 +1769,22 @@ mod capacity_tests {
         destination.push("note.txt");
         let materialization = MaterializationTarget::new(
             &lease,
+            MaterializationId::from_random_bytes([7; 16]),
             staging_path,
             destination,
             SuppressionToken::from_random_bytes([6; 16]),
+            Box::new(std::io::Cursor::new(Vec::<u8>::new())),
         )
         .unwrap();
         assert!(materialization.staging_path.capacity() <= MAX_NATIVE_PATH_BYTES);
         assert!(materialization.destination.capacity() <= MAX_NATIVE_PATH_BYTES);
-        let published =
-            PublishedGeneration::from_materialization(&lease, materialization, 1).unwrap();
+        let published = PublishedGeneration::from_materialization(
+            &lease,
+            materialization,
+            1,
+            Box::new(PublishedGuard),
+        )
+        .unwrap();
         assert!(published.path.capacity() <= MAX_NATIVE_PATH_BYTES);
 
         let mut executable = OsString::with_capacity(1_000_000);
@@ -1405,16 +1797,48 @@ mod capacity_tests {
         workspace_file.push(lease.root());
         workspace_file.push("note.txt");
 
-        let request =
-            EditorLaunchRequest::try_new(&lease, executable, arguments, workspace_file).unwrap();
-        assert!(request.executable.capacity() <= MAX_EDITOR_ARGUMENT_BYTES);
-        assert!(request.arguments.capacity() <= MAX_EDITOR_ARGUMENTS);
-        assert!(
-            request
-                .arguments
-                .iter()
-                .all(|argument| argument.capacity() <= MAX_EDITOR_ARGUMENT_BYTES)
-        );
+        let command = EditorCommand::try_new(executable, arguments).unwrap();
+        let resolution = EditorResolutionRequest::try_new(
+            Some(command),
+            None,
+            None,
+            EditorSupervisionMode::Strict,
+        )
+        .unwrap();
+        let request = EditorLaunchRequest::try_new(&lease, resolution, workspace_file, 1).unwrap();
+        assert_eq!(request.workspace_id().child_name(), lease.id().child_name());
+        assert_eq!(request.process_generation(), 1);
         assert!(request.workspace_file.capacity() <= MAX_NATIVE_PATH_BYTES);
+    }
+
+    #[test]
+    fn final_editor_argv_counts_the_appended_workspace_argument() {
+        let arguments = (0..MAX_EDITOR_ARGUMENTS)
+            .map(|_| OsString::from("x"))
+            .collect::<Vec<_>>();
+        let command = EditorCommand::try_new(OsString::from("editor"), arguments).unwrap();
+        assert_eq!(
+            command.validate_workspace_argument(Path::new("/workspace/note.txt")),
+            Err(HostPortError::CapacityExceeded)
+        );
+
+        let arguments = (1..MAX_EDITOR_ARGUMENTS)
+            .map(|_| OsString::from("x"))
+            .collect::<Vec<_>>();
+        let command = EditorCommand::try_new(OsString::from("editor"), arguments).unwrap();
+        assert!(
+            command
+                .validate_workspace_argument(Path::new("/workspace/note.txt"))
+                .is_ok()
+        );
+
+        let exact_path = PathBuf::from(format!("/{}", "x".repeat(MAX_EDITOR_ARGUMENT_BYTES - 1)));
+        let command = EditorCommand::try_new(OsString::from("editor"), Vec::new()).unwrap();
+        assert!(command.validate_workspace_argument(&exact_path).is_ok());
+        let oversized_path = PathBuf::from(format!("/{}", "x".repeat(MAX_EDITOR_ARGUMENT_BYTES)));
+        assert_eq!(
+            command.validate_workspace_argument(&oversized_path),
+            Err(HostPortError::CapacityExceeded)
+        );
     }
 }

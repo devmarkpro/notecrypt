@@ -738,6 +738,7 @@ dependencies = [
  "notecrypt-store",
  "serde_json",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -802,7 +803,9 @@ name = "notecrypt-e2e"
 version = "0.1.0"
 dependencies = [
  "notecrypt-crypto",
+ "notecrypt-editor-workspace",
  "notecrypt-format",
+ "notecrypt-platform-fs",
  "notecrypt-service",
  "notecrypt-store",
  "tempfile",
@@ -813,7 +816,10 @@ dependencies = [
 name = "notecrypt-editor-workspace"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
+ "notecrypt-platform-fs",
  "notecrypt-service",
+ "tempfile",
 ]
 
 [[package]]
@@ -836,6 +842,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "getrandom 0.3.4",
+ "libc",
  "rustix",
  "tempfile",
  "windows-sys 0.61.2",

@@ -240,7 +240,10 @@ fn allowed_internal_dependencies(package: &str) -> BTreeSet<&'static str> {
         ),
         ("notecrypt-backend-git", &["notecrypt-backend"][..]),
         ("notecrypt-device-unlock", &["notecrypt-service"][..]),
-        ("notecrypt-editor-workspace", &["notecrypt-service"][..]),
+        (
+            "notecrypt-editor-workspace",
+            &["notecrypt-service", "notecrypt-platform-fs"][..],
+        ),
         ("notecrypt-tui", &["notecrypt-service"][..]),
         (
             "notecrypt-cli",
@@ -296,13 +299,13 @@ fn platform_fs_is_the_only_narrow_unsafe_island() {
     );
 
     let island_source = fs::read_to_string(island.join("src/lib.rs")).expect("read island source");
-    assert_eq!(island_source.matches("#[allow(unsafe_code)]").count(), 1);
+    assert_eq!(island_source.matches("#[allow(unsafe_code)]").count(), 6);
     let unsafe_blocks = island_source.matches("unsafe {").count();
-    assert_eq!(unsafe_blocks, 21);
+    assert_eq!(unsafe_blocks, 98);
     assert_eq!(island_source.matches("SAFETY:").count(), unsafe_blocks);
     assert!(!island_source.contains("unsafe fn"));
     assert!(!island_source.contains("unsafe impl"));
-    assert!(!island_source.contains("extern \""));
+    assert_eq!(island_source.matches("unsafe extern").count(), 2);
 
     let workspace = WorkspacePolicy::load(env!("CARGO_MANIFEST_DIR")).unwrap();
     for package in workspace.packages {

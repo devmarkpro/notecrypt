@@ -18,6 +18,15 @@ use crate::{RecoverySecretInput, ServiceError, WorkspaceProvider};
 pub const MAX_WARNING_OFFSETS: usize = 16;
 /// Maximum time granted to one explicitly armed durable final save.
 pub const MAX_FINAL_SAVE_GRACE: Duration = Duration::from_secs(30);
+#[doc(hidden)]
+pub const EDITOR_FORCE_REAP_GRACE: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditorQuiescenceObservation {
+    Known(bool),
+    Unknown,
+    Panicked,
+}
 
 /// Validated monotonic session lifetime policy.
 pub struct SessionPolicy {
@@ -1286,9 +1295,17 @@ pub trait UnlockedVaultCapability: Send {
         request: BeginCompromiseRekey,
         cancel: &RepositoryCancellation,
     ) -> Result<PreparedCompromiseRekey, RepositoryPortError>;
-    fn register_workspace(
+    fn prepare_workspace_registration(
         &self,
-    ) -> Result<Box<dyn RegisteredWorkspaceCapability>, RepositoryPortError>;
+    ) -> Result<Box<dyn PreparedWorkspaceUnregister>, RepositoryPortError>;
+    fn commit_workspace_registration(
+        &self,
+        registration: &mut dyn PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError>;
+    fn activate_prepared_workspace_registration(
+        &self,
+        registration: &mut dyn PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError>;
     fn activate_workspace(
         &self,
         registered: &mut dyn RegisteredWorkspaceCapability,
@@ -1300,12 +1317,14 @@ pub trait UnlockedVaultCapability: Send {
         &self,
         active: &mut dyn ActiveWorkspaceCapability,
     ) -> Result<(), RepositoryPortError>;
-    fn unregister_removed_workspace(
-        &self,
-        active: &mut dyn ActiveWorkspaceCapability,
-        guard: Box<dyn crate::WorkspaceAbsenceGuard>,
-    ) -> Result<(), RepositoryPortError>;
     fn close(self: Box<Self>) -> Result<(), RepositoryPortError>;
+}
+
+/// Linear exact-workspace cleanup authority prepared before root revocation.
+pub trait PreparedWorkspaceUnregister: Send {
+    fn workspace_id(&self) -> &crate::WorkspaceId;
+    fn unregister_absent(&mut self) -> Result<(), RepositoryPortError>;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// One-way root revocation detached from the consuming repository capability.
@@ -1316,6 +1335,12 @@ pub trait VaultRootRevocation: Send + Sync {
 /// Repository composition seam used by recovery unlock.
 pub trait VaultRepository: Send + Sync + 'static {
     fn current_vault_id(&self) -> Result<Option<VaultId>, RepositoryPortError>;
+    fn reserve_workspace_absence(
+        &self,
+        _id: &crate::WorkspaceId,
+    ) -> Result<WorkspaceAbsenceReservation, RepositoryPortError> {
+        Err(RepositoryPortError::Unavailable)
+    }
     fn unlock_recovery(
         &self,
         secret: RecoverySecretInput,
@@ -1424,7 +1449,7 @@ enum StoreRepositoryState {
 /// Production bridge that keeps store and crypto types out of UI contracts.
 pub struct StoreVaultRepository {
     state: Arc<Mutex<StoreRepositoryState>>,
-    workspace: Arc<dyn WorkspaceProvider>,
+    absence: Arc<StoreWorkspaceAbsenceVerifier>,
     targets: Arc<dyn CompromiseTargetResolver>,
 }
 
@@ -1434,9 +1459,10 @@ impl StoreVaultRepository {
         workspace: Arc<dyn WorkspaceProvider>,
         targets: Arc<dyn CompromiseTargetResolver>,
     ) -> Self {
+        let absence = Arc::new(StoreWorkspaceAbsenceVerifier::new(Arc::clone(&workspace)));
         Self {
             state: Arc::new(Mutex::new(StoreRepositoryState::Existing(store))),
-            workspace,
+            absence,
             targets,
         }
     }
@@ -1456,9 +1482,10 @@ impl StoreVaultRepository {
         workspace: Arc<dyn WorkspaceProvider>,
         targets: Arc<dyn CompromiseTargetResolver>,
     ) -> Self {
+        let absence = Arc::new(StoreWorkspaceAbsenceVerifier::new(Arc::clone(&workspace)));
         Self {
             state: Arc::new(Mutex::new(StoreRepositoryState::Vacant(Arc::new(target)))),
-            workspace,
+            absence,
             targets,
         }
     }
@@ -1474,14 +1501,19 @@ impl VaultRepository for StoreVaultRepository {
         )
     }
 
+    fn reserve_workspace_absence(
+        &self,
+        id: &crate::WorkspaceId,
+    ) -> Result<WorkspaceAbsenceReservation, RepositoryPortError> {
+        self.absence.reserve(id)
+    }
+
     fn unlock_recovery(
         &self,
         secret: RecoverySecretInput,
         cancel: &RepositoryCancellation,
     ) -> Result<Box<dyn UnlockedVaultCapability>, RepositoryPortError> {
-        let verifier = Arc::new(StoreWorkspaceAbsenceVerifier::new(Arc::clone(
-            &self.workspace,
-        )));
+        let verifier = Arc::clone(&self.absence);
         let store = match &*self.state.lock().unwrap_or_else(|error| error.into_inner()) {
             StoreRepositoryState::Existing(store) => Arc::clone(store),
             StoreRepositoryState::Vacant(_) => return Err(RepositoryPortError::NotFound),
@@ -1722,6 +1754,31 @@ struct StoreActiveWorkspace {
     inner: notecrypt_store::ActiveWorkspace,
 }
 
+struct StorePreparedWorkspaceRegistration {
+    id: crate::WorkspaceId,
+    inner: notecrypt_store::PreparedWorkspaceRegistration,
+    absence: Arc<StoreWorkspaceAbsenceVerifier>,
+    unregistered: bool,
+}
+
+impl PreparedWorkspaceUnregister for StorePreparedWorkspaceRegistration {
+    fn workspace_id(&self) -> &crate::WorkspaceId {
+        &self.id
+    }
+
+    fn unregister_absent(&mut self) -> Result<(), RepositoryPortError> {
+        if !self.unregistered {
+            self.inner.unregister_absent().map_err(map_store_error)?;
+            self.unregistered = true;
+        }
+        self.absence.release_after_unregister(&self.id)
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 impl ActiveWorkspaceCapability for StoreActiveWorkspace {
     fn workspace_id(&self) -> &crate::WorkspaceId {
         &self.id
@@ -1759,7 +1816,94 @@ impl StoreUnlockedVault {
 
 struct StoreWorkspaceAbsenceVerifier {
     provider: Arc<dyn WorkspaceProvider>,
-    held: Mutex<HashMap<String, Box<dyn crate::WorkspaceAbsenceGuard>>>,
+    held: Mutex<HashMap<[u8; 32], Arc<AbsenceSlot>>>,
+}
+
+type AbsenceSlot = Mutex<Option<Box<dyn crate::WorkspaceAbsenceGuard>>>;
+
+/// A pre-reserved, exact-ID slot for transferring a physical absence guard.
+pub struct WorkspaceAbsenceReservation {
+    verifier: Option<Arc<StoreWorkspaceAbsenceVerifier>>,
+    key: [u8; 32],
+    slot: Arc<AbsenceSlot>,
+    committed: bool,
+}
+
+impl WorkspaceAbsenceReservation {
+    fn commit(mut self, guard: Box<dyn crate::WorkspaceAbsenceGuard>) {
+        self.slot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .replace(guard);
+        self.committed = true;
+    }
+
+    #[cfg(test)]
+    fn detached_for_test(id: &crate::WorkspaceId) -> Result<Self, RepositoryPortError> {
+        Ok(Self {
+            verifier: None,
+            key: workspace_absence_key(id)?,
+            slot: Arc::new(Mutex::new(None)),
+            committed: false,
+        })
+    }
+}
+
+impl Drop for WorkspaceAbsenceReservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let Some(verifier) = &self.verifier else {
+            return;
+        };
+        let mut held = verifier
+            .held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if held
+            .get(&self.key)
+            .is_some_and(|slot| Arc::ptr_eq(slot, &self.slot))
+        {
+            held.remove(&self.key);
+        }
+    }
+}
+
+struct BorrowedAbsenceReservation<'a> {
+    verifier: &'a StoreWorkspaceAbsenceVerifier,
+    key: [u8; 32],
+    slot: Arc<AbsenceSlot>,
+    committed: bool,
+}
+
+impl BorrowedAbsenceReservation<'_> {
+    fn commit(mut self, guard: Box<dyn crate::WorkspaceAbsenceGuard>) {
+        self.slot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .replace(guard);
+        self.committed = true;
+    }
+}
+
+impl Drop for BorrowedAbsenceReservation<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let mut held = self
+            .verifier
+            .held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if held
+            .get(&self.key)
+            .is_some_and(|slot| Arc::ptr_eq(slot, &self.slot))
+        {
+            held.remove(&self.key);
+        }
+    }
 }
 
 impl StoreWorkspaceAbsenceVerifier {
@@ -1770,16 +1914,29 @@ impl StoreWorkspaceAbsenceVerifier {
         }
     }
 
-    fn stage(
+    fn reserve(
+        self: &Arc<Self>,
+        id: &crate::WorkspaceId,
+    ) -> Result<WorkspaceAbsenceReservation, RepositoryPortError> {
+        let (key, slot) = self.reserve_slot(id)?;
+        Ok(WorkspaceAbsenceReservation {
+            verifier: Some(Arc::clone(self)),
+            key,
+            slot,
+            committed: false,
+        })
+    }
+
+    fn reserve_slot(
         &self,
         id: &crate::WorkspaceId,
-        guard: Box<dyn crate::WorkspaceAbsenceGuard>,
-    ) -> Result<(), RepositoryPortError> {
+    ) -> Result<([u8; 32], Arc<AbsenceSlot>), RepositoryPortError> {
+        let key = workspace_absence_key(id)?;
         let mut held = self.held.lock().unwrap_or_else(|error| error.into_inner());
         if held.len() == 1_024 {
             return Err(RepositoryPortError::CapacityExceeded);
         }
-        if held.contains_key(id.child_name()) {
+        if held.contains_key(&key) {
             return Err(RepositoryPortError::Busy);
         }
         if crate::ports::allocation_failure_injected_for_test() {
@@ -1787,21 +1944,59 @@ impl StoreWorkspaceAbsenceVerifier {
         }
         held.try_reserve(1)
             .map_err(|_| RepositoryPortError::AllocationFailed)?;
-        let mut key = String::new();
-        if crate::ports::allocation_failure_injected_for_test() {
-            return Err(RepositoryPortError::AllocationFailed);
+        let slot = Arc::new(Mutex::new(None));
+        held.insert(key, Arc::clone(&slot));
+        Ok((key, slot))
+    }
+
+    fn release_after_unregister(&self, id: &crate::WorkspaceId) -> Result<(), RepositoryPortError> {
+        let key = workspace_absence_key(id)?;
+        let slot = self
+            .held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&key)
+            .cloned()
+            .ok_or(RepositoryPortError::InvalidInput)?;
+        let finalized = catch_unwind(AssertUnwindSafe(|| {
+            let mut guard = slot.lock().unwrap_or_else(|error| error.into_inner());
+            guard
+                .as_mut()
+                .ok_or(RepositoryPortError::InvalidInput)?
+                .finalize()
+                .map_err(|_| RepositoryPortError::CleanupRequired)
+        }))
+        .map_err(|_| RepositoryPortError::CleanupRequired)?;
+        finalized?;
+        let mut held = self.held.lock().unwrap_or_else(|error| error.into_inner());
+        if held
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, &slot))
+        {
+            held.remove(&key);
+            Ok(())
+        } else {
+            Err(RepositoryPortError::StaleCapability)
         }
-        key.try_reserve_exact(id.child_name().len())
-            .map_err(|_| RepositoryPortError::AllocationFailed)?;
-        key.push_str(id.child_name());
-        held.insert(key, guard);
-        Ok(())
+    }
+
+    #[cfg(test)]
+    fn held_count(&self) -> usize {
+        self.held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .len()
     }
 }
 
-struct StoreAbsenceGuard {
-    _guard: Box<dyn crate::WorkspaceAbsenceGuard>,
+fn workspace_absence_key(id: &crate::WorkspaceId) -> Result<[u8; 32], RepositoryPortError> {
+    id.child_name()
+        .as_bytes()
+        .try_into()
+        .map_err(|_| RepositoryPortError::InvalidInput)
 }
+
+struct StoreAbsenceGuard;
 impl notecrypt_store::WorkspaceAbsenceGuard for StoreAbsenceGuard {}
 
 impl notecrypt_store::TrustedWorkspaceAbsenceVerifier for StoreWorkspaceAbsenceVerifier {
@@ -1810,24 +2005,42 @@ impl notecrypt_store::TrustedWorkspaceAbsenceVerifier for StoreWorkspaceAbsenceV
         workspace: &notecrypt_store::CleanupWorkspaceId,
     ) -> Result<Box<dyn notecrypt_store::WorkspaceAbsenceGuard>, StoreError> {
         let id = crate::WorkspaceId::from_store(workspace).map_err(map_workspace_id_store_error)?;
-        let staged = self
+        let key = workspace_absence_key(&id).map_err(|_| StoreError::InvalidCapability)?;
+        let already_staged = self
             .held
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .remove(id.child_name());
-        let guard = match staged {
-            Some(guard) => guard,
-            None => self
-                .provider
-                .acquire_verified_absence(&id)
-                .map_err(|error| match error {
-                    crate::HostPortError::LiveWorkspace => StoreError::Busy,
-                    crate::HostPortError::CapacityExceeded => StoreError::LimitExceeded,
-                    crate::HostPortError::AllocationFailed => StoreError::AllocationFailed,
-                    _ => StoreError::InvalidCapability,
-                })?,
-        };
-        Ok(Box::new(StoreAbsenceGuard { _guard: guard }))
+            .get(&key)
+            .is_some_and(|slot| {
+                slot.lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .is_some()
+            });
+        if !already_staged {
+            let (key, slot) = self.reserve_slot(&id).map_err(|error| match error {
+                RepositoryPortError::CapacityExceeded => StoreError::LimitExceeded,
+                RepositoryPortError::AllocationFailed => StoreError::AllocationFailed,
+                RepositoryPortError::Busy => StoreError::Busy,
+                _ => StoreError::InvalidCapability,
+            })?;
+            let reservation = BorrowedAbsenceReservation {
+                verifier: self,
+                key,
+                slot,
+                committed: false,
+            };
+            let guard =
+                self.provider
+                    .acquire_verified_absence(&id)
+                    .map_err(|error| match error {
+                        crate::HostPortError::LiveWorkspace => StoreError::Busy,
+                        crate::HostPortError::CapacityExceeded => StoreError::LimitExceeded,
+                        crate::HostPortError::AllocationFailed => StoreError::AllocationFailed,
+                        _ => StoreError::InvalidCapability,
+                    })?;
+            reservation.commit(guard);
+        }
+        Ok(Box::new(StoreAbsenceGuard))
     }
 }
 
@@ -2454,28 +2667,68 @@ impl UnlockedVaultCapability for StoreUnlockedVault {
         }
     }
 
-    fn register_workspace(
+    fn prepare_workspace_registration(
         &self,
-    ) -> Result<Box<dyn RegisteredWorkspaceCapability>, RepositoryPortError> {
+    ) -> Result<Box<dyn PreparedWorkspaceUnregister>, RepositoryPortError> {
         if !self.accepting.load(Ordering::Acquire) {
             return Err(RepositoryPortError::Locked);
         }
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let registered = state
+        let prepared = state
             .unlocked
             .as_ref()
             .ok_or(RepositoryPortError::Locked)?
-            .register_cleanup_workspace()
+            .prepare_cleanup_workspace_registration()
             .map_err(map_store_error)?;
+        let id = crate::WorkspaceId::from_store(prepared.workspace_id())
+            .map_err(map_host_repository_error)?;
+        Ok(Box::new(StorePreparedWorkspaceRegistration {
+            id,
+            inner: prepared,
+            absence: Arc::clone(&self.absence),
+            unregistered: false,
+        }))
+    }
+
+    fn commit_workspace_registration(
+        &self,
+        registration: &mut dyn PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
         if !self.accepting.load(Ordering::Acquire) {
             return Err(RepositoryPortError::Locked);
         }
-        let id = crate::WorkspaceId::from_store(registered.workspace_id())
-            .map_err(map_host_repository_error)?;
-        Ok(Box::new(StoreRegisteredWorkspace {
-            id,
-            inner: registered,
-        }))
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let registration = registration
+            .as_any_mut()
+            .downcast_mut::<StorePreparedWorkspaceRegistration>()
+            .ok_or(RepositoryPortError::InvalidInput)?;
+        state
+            .unlocked
+            .as_ref()
+            .ok_or(RepositoryPortError::Locked)?
+            .commit_cleanup_workspace_registration(&mut registration.inner)
+            .map_err(map_store_error)
+    }
+
+    fn activate_prepared_workspace_registration(
+        &self,
+        registration: &mut dyn PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
+        if !self.accepting.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Locked);
+        }
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let registration = registration
+            .as_any_mut()
+            .downcast_mut::<StorePreparedWorkspaceRegistration>()
+            .ok_or(RepositoryPortError::InvalidInput)?;
+        state
+            .unlocked
+            .as_ref()
+            .ok_or(RepositoryPortError::Locked)?
+            .activate_cleanup_workspace_registration(&mut registration.inner)
+            .map_err(map_store_error)?;
+        Ok(())
     }
 
     fn activate_workspace(
@@ -2555,16 +2808,8 @@ impl UnlockedVaultCapability for StoreUnlockedVault {
             .map_err(map_store_error)?;
         unlocked
             .unregister_cleanup_workspace(&mut active.inner, &mut proof)
-            .map_err(map_store_error)
-    }
-
-    fn unregister_removed_workspace(
-        &self,
-        active: &mut dyn ActiveWorkspaceCapability,
-        guard: Box<dyn crate::WorkspaceAbsenceGuard>,
-    ) -> Result<(), RepositoryPortError> {
-        self.absence.stage(active.workspace_id(), guard)?;
-        self.unregister_absent_workspace(active)
+            .map_err(map_store_error)?;
+        self.absence.release_after_unregister(&active.id)
     }
 
     fn close(self: Box<Self>) -> Result<(), RepositoryPortError> {
@@ -2657,6 +2902,7 @@ pub struct SessionComponents {
     pub(crate) repository: Arc<dyn VaultRepository>,
     pub(crate) workspace: Arc<dyn WorkspaceProvider>,
     pub(crate) external_files: Arc<dyn crate::ExternalFileProvider>,
+    pub(crate) editor: Arc<dyn crate::EditorSupervisor>,
     pub(crate) clock: Arc<dyn MonotonicClock>,
     pub(crate) policy: SessionPolicy,
 }
@@ -2793,58 +3039,48 @@ impl RootCapabilitySlot {
         Ok(())
     }
 
-    fn register_workspace(
+    fn prepare_workspace_registration(
         &self,
-    ) -> Result<Box<dyn RegisteredWorkspaceCapability>, RepositoryPortError> {
+    ) -> Result<Box<dyn PreparedWorkspaceUnregister>, RepositoryPortError> {
         if !self.accepting.load(Ordering::Acquire) {
             return Err(RepositoryPortError::Locked);
         }
-        let registered = self
-            .capability
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .ok_or(RepositoryPortError::Locked)?
-            .register_workspace()?;
-        if !self.accepting.load(Ordering::Acquire) {
-            drop(registered);
-            return Err(RepositoryPortError::Locked);
-        }
-        Ok(registered)
-    }
-
-    fn activate_workspace(
-        &self,
-        registered: &mut dyn RegisteredWorkspaceCapability,
-    ) -> Result<Box<dyn ActiveWorkspaceCapability>, RepositoryPortError> {
-        if !self.accepting.load(Ordering::Acquire) {
-            return Err(RepositoryPortError::Locked);
-        }
-        let active = self
-            .capability
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .ok_or(RepositoryPortError::Locked)?
-            .activate_workspace(registered)?;
-        if !self.accepting.load(Ordering::Acquire) {
-            drop(active);
-            return Err(RepositoryPortError::Locked);
-        }
-        Ok(active)
-    }
-
-    fn unregister_removed_workspace(
-        &self,
-        active: &mut dyn ActiveWorkspaceCapability,
-        guard: Box<dyn crate::WorkspaceAbsenceGuard>,
-    ) -> Result<(), RepositoryPortError> {
         self.capability
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .as_ref()
             .ok_or(RepositoryPortError::Locked)?
-            .unregister_removed_workspace(active, guard)
+            .prepare_workspace_registration()
+    }
+
+    fn commit_workspace_registration(
+        &self,
+        registration: &mut dyn PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
+        if !self.accepting.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Locked);
+        }
+        self.capability
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .ok_or(RepositoryPortError::Locked)?
+            .commit_workspace_registration(registration)
+    }
+
+    fn activate_prepared_workspace_registration(
+        &self,
+        registration: &mut dyn PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
+        if !self.accepting.load(Ordering::Acquire) {
+            return Err(RepositoryPortError::Locked);
+        }
+        self.capability
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .ok_or(RepositoryPortError::Locked)?
+            .activate_prepared_workspace_registration(registration)
     }
 }
 
@@ -2859,6 +3095,7 @@ impl SessionComponents {
             repository,
             workspace,
             external_files: Arc::new(crate::ports::UnavailableExternalFiles),
+            editor: Arc::new(crate::ports::UnavailableEditorSupervisor),
             clock,
             policy,
         }
@@ -2871,6 +3108,13 @@ impl SessionComponents {
         external_files: Arc<dyn crate::ExternalFileProvider>,
     ) -> Self {
         self.external_files = external_files;
+        self
+    }
+
+    /// Installs the process-tree supervisor used by lock and shutdown cleanup.
+    #[must_use]
+    pub fn with_editor_supervisor(mut self, editor: Arc<dyn crate::EditorSupervisor>) -> Self {
+        self.editor = editor;
         self
     }
 }
@@ -2902,13 +3146,16 @@ pub(crate) struct SessionManager {
     vault_id: Mutex<Option<VaultId>>,
     workspace: Arc<dyn WorkspaceProvider>,
     external_files: Arc<dyn crate::ExternalFileProvider>,
+    editor: Arc<dyn crate::EditorSupervisor>,
     clock: Arc<dyn MonotonicClock>,
     policy: SessionPolicy,
     data: Mutex<SessionData>,
     clock_sequence: AtomicUsize,
     clock_observed: Mutex<(usize, Duration)>,
     workspaces: Mutex<HashMap<String, Arc<TrackedWorkspace>>>,
+    cleanup_workspaces: Mutex<Vec<Arc<TrackedWorkspace>>>,
     workspace_attempts: AtomicUsize,
+    unresolved_workspace_cleanup: AtomicUsize,
     changed: Condvar,
 }
 
@@ -2947,8 +3194,43 @@ fn try_reserve_repository_vec<T>(
 
 struct TrackedWorkspace {
     generation: u64,
-    value: Mutex<Option<(crate::WorkspaceLease, Box<dyn ActiveWorkspaceCapability>)>>,
+    value: Mutex<Option<TrackedWorkspaceValue>>,
     paths: Mutex<crate::WorkspacePathRegistry>,
+}
+
+enum TrackedWorkspaceValue {
+    Registration {
+        prepared: Box<dyn PreparedWorkspaceUnregister>,
+    },
+    RegistrationAbsenceCommitted {
+        id: crate::WorkspaceId,
+        prepared: Box<dyn PreparedWorkspaceUnregister>,
+    },
+    Live {
+        workspace: crate::WorkspaceLease,
+        prepared: Box<dyn PreparedWorkspaceUnregister>,
+    },
+    NeedsPhysicalAbsence {
+        id: crate::WorkspaceId,
+        workspace: Option<crate::WorkspaceLease>,
+        prepared: Box<dyn PreparedWorkspaceUnregister>,
+    },
+    AbsenceCommitted {
+        id: crate::WorkspaceId,
+        prepared: Box<dyn PreparedWorkspaceUnregister>,
+    },
+}
+
+impl TrackedWorkspaceValue {
+    fn workspace(&self) -> Option<&crate::WorkspaceLease> {
+        match self {
+            Self::Live { workspace, .. } => Some(workspace),
+            Self::NeedsPhysicalAbsence { workspace, .. } => workspace.as_ref(),
+            Self::Registration { .. }
+            | Self::RegistrationAbsenceCommitted { .. }
+            | Self::AbsenceCommitted { .. } => None,
+        }
+    }
 }
 
 enum WorkspaceCreateRequest {
@@ -2960,6 +3242,25 @@ enum WorkspaceCreateRequest {
 pub struct WorkspaceSession {
     manager: std::sync::Weak<SessionManager>,
     record: Arc<TrackedWorkspace>,
+}
+
+#[cfg(feature = "test-support")]
+impl WorkspaceSession {
+    pub fn with_lease_for_test<T>(
+        &self,
+        inspect: impl FnOnce(&crate::WorkspaceLease) -> T,
+    ) -> Result<T, ServiceError> {
+        let value = self
+            .record
+            .value
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let lease = value
+            .as_ref()
+            .and_then(TrackedWorkspaceValue::workspace)
+            .ok_or(ServiceError::StaleCapability)?;
+        Ok(inspect(lease))
+    }
 }
 
 struct WorkspaceAttemptGuard<'a>(&'a AtomicUsize);
@@ -3024,7 +3325,15 @@ impl SessionManager {
             .value
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let (workspace, _) = tracked.as_mut().ok_or(ServiceError::StaleCapability)?;
+        let workspace = match tracked.as_mut().ok_or(ServiceError::StaleCapability)? {
+            TrackedWorkspaceValue::Live { workspace, .. } => workspace,
+            TrackedWorkspaceValue::NeedsPhysicalAbsence { .. }
+            | TrackedWorkspaceValue::AbsenceCommitted { .. }
+            | TrackedWorkspaceValue::Registration { .. }
+            | TrackedWorkspaceValue::RegistrationAbsenceCommitted { .. } => {
+                return Err(ServiceError::StaleCapability);
+            }
+        };
         let opened = catch_unwind(AssertUnwindSafe(|| {
             self.workspace
                 .open_stable_source(workspace, relative_path, expected_generation)
@@ -3087,11 +3396,16 @@ impl SessionManager {
         workspaces
             .try_reserve(MAX_ACTIVE_WORKSPACES)
             .map_err(|_| ServiceError::AllocationFailed)?;
+        let mut cleanup_workspaces = Vec::new();
+        cleanup_workspaces
+            .try_reserve_exact(MAX_ACTIVE_WORKSPACES)
+            .map_err(|_| ServiceError::AllocationFailed)?;
         Ok(Arc::new(Self {
             repository: components.repository,
             vault_id: Mutex::new(vault_id),
             workspace: components.workspace,
             external_files: components.external_files,
+            editor: components.editor,
             clock: components.clock,
             policy: components.policy,
             data: Mutex::new(SessionData {
@@ -3112,7 +3426,9 @@ impl SessionManager {
             clock_sequence: AtomicUsize::new(0),
             clock_observed: Mutex::new((0, now)),
             workspaces: Mutex::new(workspaces),
+            cleanup_workspaces: Mutex::new(cleanup_workspaces),
             workspace_attempts: AtomicUsize::new(0),
+            unresolved_workspace_cleanup: AtomicUsize::new(0),
             changed: Condvar::new(),
         }))
     }
@@ -3248,32 +3564,60 @@ impl SessionManager {
                 return Err(ServiceError::CapacityExceeded);
             }
         }
-        let mut registered = root.register_workspace().map_err(map_repository_error)?;
-        let id = match registered
-            .workspace_id()
-            .try_duplicate()
-            .map_err(map_host_error)
+        if crate::ports::allocation_failure_injected_for_test() {
+            return Err(ServiceError::AllocationFailed);
+        }
+        let record = Arc::new(TrackedWorkspace {
+            generation,
+            value: Mutex::new(None),
+            paths: Mutex::new(paths),
+        });
         {
-            Ok(id) => id,
-            Err(_) => {
-                self.mark_cleanup_required();
-                return Err(ServiceError::CleanupRequired);
+            let mut cleanup = self
+                .cleanup_workspaces
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if cleanup.len() == MAX_ACTIVE_WORKSPACES {
+                return Err(ServiceError::CapacityExceeded);
             }
+            cleanup.push(Arc::clone(&record));
+        }
+        let prepared =
+            match catch_unwind(AssertUnwindSafe(|| root.prepare_workspace_registration())) {
+                Ok(Ok(prepared)) => prepared,
+                Ok(Err(_)) | Err(_) => {
+                    self.cleanup_workspaces
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .retain(|current| !Arc::ptr_eq(current, &record));
+                    return Err(ServiceError::CleanupRequired);
+                }
+            };
+        record
+            .value
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .replace(TrackedWorkspaceValue::Registration { prepared });
+        let id = {
+            let value = record
+                .value
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let TrackedWorkspaceValue::Registration { prepared } =
+                value.as_ref().ok_or(ServiceError::CleanupRequired)?
+            else {
+                return Err(ServiceError::CleanupRequired);
+            };
+            prepared.workspace_id().duplicate()
         };
         let key = match crate::ports::try_copy_str(id.child_name(), 32).map_err(map_host_error) {
             Ok(key) => key,
-            Err(_) => {
-                self.mark_cleanup_required();
-                return Err(ServiceError::CleanupRequired);
+            Err(primary) => {
+                return Err(self.cleanup_failed_workspace_preparation(&record, primary));
             }
         };
-        let request_id = match id.try_duplicate().map_err(map_host_error) {
-            Ok(id) => id,
-            Err(_) => {
-                self.mark_cleanup_required();
-                return Err(ServiceError::CleanupRequired);
-            }
-        };
+        let cleanup_id = id.duplicate();
+        let request_id = id.duplicate();
         let request = match mode {
             crate::WorkspaceMode::Targeted => {
                 crate::TargetWorkspaceRequest::new(request_id, vault_id, repository_root)
@@ -3286,17 +3630,64 @@ impl SessionManager {
         };
         let request = match request {
             Ok(request) => request,
-            Err(_) => {
-                if self
-                    .rollback_registered_workspace(&root, &mut *registered, &id, None)
-                    .is_err()
-                {
-                    self.mark_cleanup_required();
-                    return Err(ServiceError::CleanupRequired);
-                }
-                return Err(ServiceError::ExecutorFailed);
+            Err(error) => {
+                return Err(
+                    self.cleanup_failed_workspace_preparation(&record, map_host_error(error))
+                );
             }
         };
+        let committed = {
+            let mut value = record
+                .value
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let TrackedWorkspaceValue::Registration { prepared } =
+                value.as_mut().ok_or(ServiceError::CleanupRequired)?
+            else {
+                return Err(ServiceError::CleanupRequired);
+            };
+            catch_unwind(AssertUnwindSafe(|| {
+                root.commit_workspace_registration(&mut **prepared)
+            }))
+        };
+        if !matches!(committed, Ok(Ok(()))) {
+            self.mark_cleanup_required();
+            return Err(ServiceError::CleanupRequired);
+        }
+        let activated = {
+            let mut value = record
+                .value
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let TrackedWorkspaceValue::Registration { prepared } =
+                value.as_mut().ok_or(ServiceError::CleanupRequired)?
+            else {
+                return Err(ServiceError::CleanupRequired);
+            };
+            catch_unwind(AssertUnwindSafe(|| {
+                root.activate_prepared_workspace_registration(&mut **prepared)
+            }))
+        };
+        if !matches!(activated, Ok(Ok(()))) {
+            self.mark_cleanup_required();
+            return Err(ServiceError::CleanupRequired);
+        }
+        {
+            let mut value = record
+                .value
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let retained = value.take().ok_or(ServiceError::CleanupRequired)?;
+            let TrackedWorkspaceValue::Registration { prepared } = retained else {
+                *value = Some(retained);
+                return Err(ServiceError::CleanupRequired);
+            };
+            *value = Some(TrackedWorkspaceValue::NeedsPhysicalAbsence {
+                id: cleanup_id,
+                workspace: None,
+                prepared,
+            });
+        }
         let workspace = catch_unwind(AssertUnwindSafe(|| match request {
             WorkspaceCreateRequest::Target(request) => self.workspace.create_target(request),
             WorkspaceCreateRequest::WholeVault(request) => {
@@ -3308,10 +3699,7 @@ impl SessionManager {
         let workspace = match workspace {
             Ok(workspace) => workspace,
             Err(primary) => {
-                if self
-                    .rollback_registered_workspace(&root, &mut *registered, &id, None)
-                    .is_err()
-                {
+                if self.cleanup_workspace_record(&record).is_err() {
                     self.mark_cleanup_required();
                     return Err(ServiceError::CleanupRequired);
                 }
@@ -3320,54 +3708,46 @@ impl SessionManager {
         };
         if workspace.id().child_name() != id.child_name() || workspace.mode() != mode {
             let removed_wrong_workspace = catch_unwind(AssertUnwindSafe(|| {
-                self.workspace.remove_workspace(workspace)
+                self.workspace.remove_workspace(&workspace)
             }))
             .is_ok_and(|result| result.is_ok());
-            let rolled_back_registered = self
-                .rollback_registered_workspace(&root, &mut *registered, &id, None)
-                .is_ok();
+            let rolled_back_registered = self.cleanup_workspace_record(&record).is_ok();
             if !removed_wrong_workspace || !rolled_back_registered {
                 self.mark_cleanup_required();
             }
             return Err(ServiceError::CleanupRequired);
         }
         if self.current_generation() != Some(generation) {
-            if self
-                .rollback_registered_workspace(&root, &mut *registered, &id, Some(workspace))
-                .is_err()
-            {
+            Self::attach_cleanup_workspace(&record, workspace)?;
+            if self.cleanup_workspace_record(&record).is_err() {
                 self.mark_cleanup_required();
                 return Err(ServiceError::CleanupRequired);
             }
             return Err(ServiceError::Cancelled);
         }
-        let active = match root.activate_workspace(&mut *registered) {
-            Ok(active) => active,
-            Err(_) => {
-                if self
-                    .rollback_registered_workspace(&root, &mut *registered, &id, Some(workspace))
-                    .is_err()
-                {
-                    self.mark_cleanup_required();
-                }
-                return Err(ServiceError::CleanupRequired);
-            }
-        };
-        if active.workspace_id().child_name() != id.child_name() {
-            let removed = catch_unwind(AssertUnwindSafe(|| {
-                self.workspace.remove_workspace(workspace)
+        Self::attach_cleanup_workspace(&record, workspace)?;
+        let confirmed = {
+            let value = record
+                .value
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let workspace = value
+                .as_ref()
+                .ok_or(ServiceError::CleanupRequired)?
+                .workspace()
+                .ok_or(ServiceError::CleanupRequired)?;
+            catch_unwind(AssertUnwindSafe(|| {
+                self.workspace.confirm_activated(workspace)
             }))
-            .is_ok_and(|result| result.is_ok());
-            drop(active);
-            self.mark_cleanup_required();
-            let _ = removed;
+            .map_err(|_| ServiceError::CleanupRequired)
+            .and_then(|result| result.map_err(map_host_error))
+        };
+        if confirmed.is_err() {
+            if self.rollback_active_workspace(&root, &record).is_err() {
+                self.mark_cleanup_required();
+            }
             return Err(ServiceError::CleanupRequired);
         }
-        let record = Arc::new(TrackedWorkspace {
-            generation,
-            value: Mutex::new(Some((workspace, active))),
-            paths: Mutex::new(paths),
-        });
         // Publish the active workspace while holding the same session lock that
         // begin_lock uses to close the generation. Lock cleanup can therefore
         // never scan an empty registry after activation and then miss a late
@@ -3392,7 +3772,13 @@ impl SessionManager {
             self.remove_workspace_record(&record)?;
             return Err(ServiceError::Busy);
         }
+        let mut cleanup = self
+            .cleanup_workspaces
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         workspaces.insert(key, Arc::clone(&record));
+        cleanup.retain(|current| !Arc::ptr_eq(current, &record));
+        drop(cleanup);
         drop(workspaces);
         drop(data);
         Ok(WorkspaceSession {
@@ -3401,55 +3787,27 @@ impl SessionManager {
         })
     }
 
-    fn rollback_registered_workspace(
-        &self,
-        root: &Arc<RootCapabilitySlot>,
-        registered: &mut dyn RegisteredWorkspaceCapability,
-        id: &crate::WorkspaceId,
-        workspace: Option<crate::WorkspaceLease>,
-    ) -> Result<(), ServiceError> {
-        let guard = match workspace {
-            Some(workspace) => catch_unwind(AssertUnwindSafe(|| {
-                self.workspace.remove_workspace(workspace)
-            }))
-            .map_err(|_| ServiceError::CleanupRequired)?
-            .map_err(|_| ServiceError::CleanupRequired)?,
-            None => catch_unwind(AssertUnwindSafe(|| {
-                self.workspace.acquire_verified_absence(id)
-            }))
-            .map_err(|_| ServiceError::CleanupRequired)?
-            .map_err(|_| ServiceError::CleanupRequired)?,
-        };
-        let mut active = root
-            .activate_workspace(registered)
-            .map_err(|_| ServiceError::CleanupRequired)?;
-        if registered.workspace_id().child_name() != id.child_name()
-            || active.workspace_id().child_name() != id.child_name()
-        {
-            return Err(ServiceError::CleanupRequired);
-        }
-        root.unregister_removed_workspace(&mut *active, guard)
-            .map_err(|_| ServiceError::CleanupRequired)
-    }
-
     fn rollback_active_workspace(
         &self,
-        root: &Arc<RootCapabilitySlot>,
+        _root: &Arc<RootCapabilitySlot>,
         record: &Arc<TrackedWorkspace>,
     ) -> Result<(), ServiceError> {
-        let (workspace, mut active) = record
-            .value
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .ok_or(ServiceError::CleanupRequired)?;
-        let guard = catch_unwind(AssertUnwindSafe(|| {
-            self.workspace.remove_workspace(workspace)
-        }))
-        .map_err(|_| ServiceError::CleanupRequired)?
-        .map_err(|_| ServiceError::CleanupRequired)?;
-        root.unregister_removed_workspace(&mut *active, guard)
-            .map_err(|_| ServiceError::CleanupRequired)
+        self.cleanup_workspace_record(record)
+    }
+
+    fn cleanup_failed_workspace_preparation(
+        &self,
+        record: &Arc<TrackedWorkspace>,
+        primary: ServiceError,
+    ) -> ServiceError {
+        let cleaned = catch_unwind(AssertUnwindSafe(|| self.cleanup_workspace_record(record)))
+            .is_ok_and(|result| result.is_ok());
+        if cleaned {
+            primary
+        } else {
+            self.mark_cleanup_required();
+            ServiceError::CleanupRequired
+        }
     }
 
     pub(crate) fn remove_workspace(
@@ -3467,82 +3825,226 @@ impl SessionManager {
     }
 
     fn remove_workspace_record(&self, record: &Arc<TrackedWorkspace>) -> Result<(), ServiceError> {
-        let (workspace, mut active) = record
+        self.cleanup_workspace_record(record).inspect_err(|_| {
+            self.mark_cleanup_required();
+        })
+    }
+
+    fn cleanup_workspace_record(&self, record: &Arc<TrackedWorkspace>) -> Result<(), ServiceError> {
+        let value = record
             .value
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
             .ok_or(ServiceError::StaleCapability)?;
-        self.workspaces
+        let pending = match value {
+            TrackedWorkspaceValue::Registration { prepared } => {
+                let id = prepared.workspace_id().duplicate();
+                let reservation = match catch_unwind(AssertUnwindSafe(|| {
+                    self.repository.reserve_workspace_absence(&id)
+                })) {
+                    Ok(Ok(reservation)) => reservation,
+                    Ok(Err(_)) | Err(_) => {
+                        Self::restore_tracked_workspace(
+                            record,
+                            TrackedWorkspaceValue::Registration { prepared },
+                        );
+                        return Err(ServiceError::CleanupRequired);
+                    }
+                };
+                let guard = match catch_unwind(AssertUnwindSafe(|| {
+                    self.workspace.acquire_verified_absence(&id)
+                })) {
+                    Ok(Ok(guard)) => guard,
+                    Ok(Err(_)) | Err(_) => {
+                        Self::restore_tracked_workspace(
+                            record,
+                            TrackedWorkspaceValue::Registration { prepared },
+                        );
+                        return Err(ServiceError::CleanupRequired);
+                    }
+                };
+                reservation.commit(guard);
+                TrackedWorkspaceValue::RegistrationAbsenceCommitted { id, prepared }
+            }
+            committed @ TrackedWorkspaceValue::RegistrationAbsenceCommitted { .. } => committed,
+            TrackedWorkspaceValue::Live {
+                workspace,
+                prepared,
+            } => TrackedWorkspaceValue::NeedsPhysicalAbsence {
+                id: workspace.id().duplicate(),
+                workspace: Some(workspace),
+                prepared,
+            },
+            pending @ TrackedWorkspaceValue::NeedsPhysicalAbsence { .. } => pending,
+            committed @ TrackedWorkspaceValue::AbsenceCommitted { .. } => committed,
+        };
+        let committed = match pending {
+            TrackedWorkspaceValue::NeedsPhysicalAbsence {
+                id,
+                workspace,
+                prepared,
+            } => {
+                let reservation = match catch_unwind(AssertUnwindSafe(|| {
+                    self.repository.reserve_workspace_absence(&id)
+                })) {
+                    Ok(Ok(reservation)) => reservation,
+                    Ok(Err(_)) | Err(_) => {
+                        Self::restore_tracked_workspace(
+                            record,
+                            TrackedWorkspaceValue::NeedsPhysicalAbsence {
+                                id,
+                                workspace,
+                                prepared,
+                            },
+                        );
+                        return Err(ServiceError::CleanupRequired);
+                    }
+                };
+                let guard = match catch_unwind(AssertUnwindSafe(|| match workspace.as_ref() {
+                    Some(workspace) => self.workspace.remove_workspace(workspace),
+                    None => self.workspace.acquire_verified_absence(&id),
+                })) {
+                    Ok(Ok(guard)) => guard,
+                    Ok(Err(_)) | Err(_) => {
+                        Self::restore_tracked_workspace(
+                            record,
+                            TrackedWorkspaceValue::NeedsPhysicalAbsence {
+                                id,
+                                workspace,
+                                prepared,
+                            },
+                        );
+                        return Err(ServiceError::CleanupRequired);
+                    }
+                };
+                reservation.commit(guard);
+                TrackedWorkspaceValue::AbsenceCommitted { id, prepared }
+            }
+            committed @ TrackedWorkspaceValue::AbsenceCommitted { .. } => committed,
+            committed @ TrackedWorkspaceValue::RegistrationAbsenceCommitted { .. } => committed,
+            TrackedWorkspaceValue::Live { .. } => {
+                unreachable!("live cleanup transitions to physical absence")
+            }
+            TrackedWorkspaceValue::Registration { .. } => {
+                unreachable!("registration cleanup transitions to committed absence")
+            }
+        };
+        let (id, mut prepared, registration) = match committed {
+            TrackedWorkspaceValue::AbsenceCommitted { id, prepared } => (id, prepared, false),
+            TrackedWorkspaceValue::RegistrationAbsenceCommitted { id, prepared } => {
+                (id, prepared, true)
+            }
+            _ => unreachable!("cleanup always transitions to committed absence"),
+        };
+        let unregistered = catch_unwind(AssertUnwindSafe(|| prepared.unregister_absent()));
+        if !matches!(unregistered, Ok(Ok(()))) {
+            let retained = if registration {
+                TrackedWorkspaceValue::RegistrationAbsenceCommitted { id, prepared }
+            } else {
+                TrackedWorkspaceValue::AbsenceCommitted { id, prepared }
+            };
+            Self::restore_tracked_workspace(record, retained);
+            return Err(ServiceError::CleanupRequired);
+        }
+        let mut workspaces = self
+            .workspaces
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if workspaces
+            .get(id.child_name())
+            .is_some_and(|current| Arc::ptr_eq(current, record))
+        {
+            workspaces.remove(id.child_name());
+        }
+        let mut cleanup = self
+            .cleanup_workspaces
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cleanup.retain(|current| !Arc::ptr_eq(current, record));
+        drop(cleanup);
+        drop(workspaces);
+        Ok(())
+    }
+
+    fn restore_tracked_workspace(record: &Arc<TrackedWorkspace>, value: TrackedWorkspaceValue) {
+        record
+            .value
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .remove(workspace.id().child_name());
-        let guard = catch_unwind(AssertUnwindSafe(|| {
-            self.workspace.remove_workspace(workspace)
-        }))
-        .map_err(|_| {
-            self.mark_cleanup_required();
-            ServiceError::CleanupRequired
-        })?
-        .map_err(|error| {
-            self.mark_cleanup_required();
-            let _ = error;
-            ServiceError::CleanupRequired
-        })?;
-        let root = {
-            let data = self.data.lock().unwrap_or_else(|error| error.into_inner());
-            data.unlocked
-                .as_ref()
-                .map(Arc::clone)
-                .ok_or(ServiceError::Locked)?
+            .replace(value);
+    }
+
+    fn attach_cleanup_workspace(
+        record: &Arc<TrackedWorkspace>,
+        workspace: crate::WorkspaceLease,
+    ) -> Result<(), ServiceError> {
+        let mut value = record
+            .value
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let retained = value.take().ok_or(ServiceError::CleanupRequired)?;
+        let TrackedWorkspaceValue::NeedsPhysicalAbsence {
+            id,
+            workspace: None,
+            prepared,
+        } = retained
+        else {
+            *value = Some(retained);
+            return Err(ServiceError::CleanupRequired);
         };
-        root.unregister_removed_workspace(&mut *active, guard)
-            .map_err(|error| {
-                self.mark_cleanup_required();
-                let _ = error;
-                ServiceError::CleanupRequired
-            })?;
+        if id.child_name() != workspace.id().child_name() {
+            *value = Some(TrackedWorkspaceValue::NeedsPhysicalAbsence {
+                id,
+                workspace: None,
+                prepared,
+            });
+            return Err(ServiceError::CleanupRequired);
+        }
+        *value = Some(TrackedWorkspaceValue::Live {
+            workspace,
+            prepared,
+        });
         Ok(())
     }
 
     fn cleanup_tracked_workspaces(&self) -> bool {
-        loop {
-            let record = self
+        let mut records: [Option<Arc<TrackedWorkspace>>; MAX_ACTIVE_WORKSPACES * 2] =
+            std::array::from_fn(|_| None);
+        let mut count = 0_usize;
+        {
+            let active = self
                 .workspaces
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .values()
-                .next()
-                .cloned();
-            let Some(record) = record else {
-                return true;
-            };
-            let pair = record
-                .value
+                .unwrap_or_else(|error| error.into_inner());
+            let pending = self
+                .cleanup_workspaces
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take();
-            let Some((workspace, active)) = pair else {
-                return false;
-            };
-            self.workspaces
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .remove(workspace.id().child_name());
-            // Root revocation precedes host cleanup. Physical absence is the
-            // security requirement here; the authenticated Active record is
-            // intentionally retained and reconciled on the next unlock.
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                self.workspace
-                    .remove_workspace(workspace)
-                    .map(drop)
-                    .map_err(map_host_error)
-            }));
-            drop(active);
-            if result.is_err() || result.is_ok_and(|result| result.is_err()) {
-                return false;
+                .unwrap_or_else(|error| error.into_inner());
+            for record in pending.iter() {
+                if count == records.len() {
+                    return false;
+                }
+                records[count] = Some(Arc::clone(record));
+                count += 1;
+            }
+            // Publication moves a record from cleanup_workspaces to workspaces while holding the
+            // same two registry locks, so a cleanup snapshot observes disjoint registries.
+            for record in active.values() {
+                if count == records.len() {
+                    return false;
+                }
+                records[count] = Some(Arc::clone(record));
+                count += 1;
             }
         }
+        let mut clean = true;
+        for record in records.into_iter().take(count).flatten() {
+            if self.cleanup_workspace_record(&record).is_err() {
+                clean = false;
+            }
+        }
+        clean
     }
 
     pub(crate) fn sample_now(&self) -> Result<Duration, ServiceError> {
@@ -4061,7 +4563,30 @@ impl SessionManager {
         })
     }
 
-    pub(crate) fn finish_lock_after_close(&self, root_was_present: bool, close_failed: bool) {
+    pub(crate) fn request_editor_stop(&self) -> bool {
+        catch_unwind(AssertUnwindSafe(|| self.editor.request_stop_all()))
+            .is_ok_and(|result| result.is_ok())
+    }
+
+    pub(crate) fn force_editor_stop(&self) -> bool {
+        catch_unwind(AssertUnwindSafe(|| self.editor.force_stop_all()))
+            .is_ok_and(|result| result.is_ok())
+    }
+
+    pub(crate) fn editors_are_quiescent(&self) -> EditorQuiescenceObservation {
+        match catch_unwind(AssertUnwindSafe(|| self.editor.poll_quiescence())) {
+            Ok(Ok(quiescence)) => EditorQuiescenceObservation::Known(quiescence.is_quiescent()),
+            Ok(Err(_)) => EditorQuiescenceObservation::Unknown,
+            Err(_) => EditorQuiescenceObservation::Panicked,
+        }
+    }
+
+    pub(crate) fn finish_lock_after_close(
+        &self,
+        root_was_present: bool,
+        close_failed: bool,
+        editors_quiescent: bool,
+    ) {
         {
             let data = self.data.lock().unwrap_or_else(|error| error.into_inner());
             if !data.cleanup_owner || !root_was_present {
@@ -4069,14 +4594,18 @@ impl SessionManager {
             }
         }
         let mut failed = close_failed;
+        failed |= !editors_quiescent;
         failed |= self.workspace_attempts.load(Ordering::Acquire) != 0;
-        failed |= !self.cleanup_tracked_workspaces();
-        failed |= catch_port_panic(|| {
-            self.workspace
-                .cleanup_owned_base()
-                .map_err(|_| ServiceError::CleanupRequired)
-        })
-        .is_err();
+        failed |= self.unresolved_workspace_cleanup.load(Ordering::Acquire) != 0;
+        if !failed {
+            failed |= !self.cleanup_tracked_workspaces();
+            failed |= catch_port_panic(|| {
+                self.workspace
+                    .cleanup_owned_base()
+                    .map_err(|_| ServiceError::CleanupRequired)
+            })
+            .is_err();
+        }
 
         let mut data = self.data.lock().unwrap_or_else(|error| error.into_inner());
         data.state = if failed || data.cleanup_required {
@@ -4117,8 +4646,58 @@ impl SessionManager {
             if self.workspace_attempts.load(Ordering::Acquire) != 0 {
                 return Err(ServiceError::Busy);
             }
+            if self.unresolved_workspace_cleanup.load(Ordering::Acquire) != 0 {
+                return Err(ServiceError::CleanupRequired);
+            }
             data.state = SessionState::Locking;
             data.cleanup_owner = true;
+        }
+        let mut callbacks_ok = self.request_editor_stop();
+        let mut quiescent = match self.editors_are_quiescent() {
+            EditorQuiescenceObservation::Known(quiescent) => quiescent,
+            EditorQuiescenceObservation::Unknown => false,
+            EditorQuiescenceObservation::Panicked => {
+                callbacks_ok = false;
+                false
+            }
+        };
+        if !quiescent {
+            callbacks_ok &= self.force_editor_stop();
+            let deadline = Instant::now().checked_add(EDITOR_FORCE_REAP_GRACE);
+            loop {
+                match self.editors_are_quiescent() {
+                    EditorQuiescenceObservation::Known(true) => {
+                        quiescent = true;
+                        break;
+                    }
+                    EditorQuiescenceObservation::Known(false)
+                    | EditorQuiescenceObservation::Unknown => {}
+                    EditorQuiescenceObservation::Panicked => {
+                        callbacks_ok = false;
+                        break;
+                    }
+                }
+                let Some(deadline) = deadline else {
+                    break;
+                };
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                std::thread::park_timeout(
+                    deadline
+                        .saturating_duration_since(now)
+                        .min(Duration::from_millis(10)),
+                );
+            }
+        }
+        let editors_clean = callbacks_ok && quiescent;
+        if !editors_clean {
+            let mut data = self.data.lock().unwrap_or_else(|error| error.into_inner());
+            data.state = SessionState::CleanupRequired;
+            data.cleanup_owner = false;
+            self.changed.notify_all();
+            return Err(ServiceError::CleanupRequired);
         }
         let tracked_clean = self.cleanup_tracked_workspaces();
         let base_clean = catch_port_panic(|| {
@@ -4252,6 +4831,26 @@ mod production_transition_tests {
         }
     }
 
+    struct TestPreparedWorkspace {
+        id: crate::WorkspaceId,
+        unregister_calls: Arc<AtomicUsize>,
+    }
+
+    impl PreparedWorkspaceUnregister for TestPreparedWorkspace {
+        fn workspace_id(&self) -> &crate::WorkspaceId {
+            &self.id
+        }
+
+        fn unregister_absent(&mut self) -> Result<(), RepositoryPortError> {
+            self.unregister_calls.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
     struct NoopRevocation;
 
     impl VaultRootRevocation for NoopRevocation {
@@ -4271,6 +4870,13 @@ mod production_transition_tests {
     impl VaultRepository for IdentityRepository {
         fn current_vault_id(&self) -> Result<Option<VaultId>, RepositoryPortError> {
             Ok(Some(self.0))
+        }
+
+        fn reserve_workspace_absence(
+            &self,
+            id: &crate::WorkspaceId,
+        ) -> Result<WorkspaceAbsenceReservation, RepositoryPortError> {
+            WorkspaceAbsenceReservation::detached_for_test(id)
         }
 
         fn unlock_recovery(
@@ -4294,10 +4900,15 @@ mod production_transition_tests {
     impl crate::WorkspaceOwnershipGuard for TestOwnershipGuard {}
 
     struct TestAbsenceGuard;
-    impl crate::WorkspaceAbsenceGuard for TestAbsenceGuard {}
+    impl crate::WorkspaceAbsenceGuard for TestAbsenceGuard {
+        fn finalize(&mut self) -> Result<(), crate::HostPortError> {
+            Ok(())
+        }
+    }
 
     struct WorkspaceBindingProvider {
         response_id: Option<crate::WorkspaceId>,
+        created: Arc<AtomicUsize>,
         removed: Arc<AtomicUsize>,
         acquired_absence: Arc<AtomicUsize>,
         fail_absence_allocation: bool,
@@ -4312,6 +4923,7 @@ mod production_transition_tests {
             &self,
             request: crate::TargetWorkspaceRequest,
         ) -> Result<crate::WorkspaceLease, crate::HostPortError> {
+            self.created.fetch_add(1, Ordering::AcqRel);
             let response_id = self
                 .response_id
                 .as_ref()
@@ -4337,6 +4949,13 @@ mod production_transition_tests {
             Err(crate::HostPortError::Unavailable)
         }
 
+        fn confirm_activated(
+            &self,
+            _lease: &crate::WorkspaceLease,
+        ) -> Result<(), crate::HostPortError> {
+            Ok(())
+        }
+
         fn materialization_target(
             &self,
             _lease: &crate::WorkspaceLease,
@@ -4349,14 +4968,14 @@ mod production_transition_tests {
             &self,
             _lease: &crate::WorkspaceLease,
             _target: crate::MaterializationTarget,
-        ) -> Result<crate::PublishedGeneration, crate::HostPortError> {
+        ) -> Result<crate::MaterializationPublication, crate::HostPortError> {
             Err(crate::HostPortError::Unavailable)
         }
 
         fn arm_published_path(
             &self,
             _lease: &crate::WorkspaceLease,
-            _published: crate::PublishedGeneration,
+            _published: &mut crate::PublishedGeneration,
         ) -> Result<(), crate::HostPortError> {
             Err(crate::HostPortError::Unavailable)
         }
@@ -4387,7 +5006,7 @@ mod production_transition_tests {
 
         fn remove_workspace(
             &self,
-            _lease: crate::WorkspaceLease,
+            _lease: &crate::WorkspaceLease,
         ) -> Result<Box<dyn crate::WorkspaceAbsenceGuard>, crate::HostPortError> {
             self.removed.fetch_add(1, Ordering::AcqRel);
             Ok(Box::new(TestAbsenceGuard))
@@ -4410,6 +5029,43 @@ mod production_transition_tests {
         authenticated_count: usize,
         active_id: crate::WorkspaceId,
         unregister_calls: Arc<AtomicUsize>,
+        commit_gate: Option<Arc<LifecycleGate>>,
+    }
+
+    #[derive(Default)]
+    struct LifecycleGate {
+        state: Mutex<(bool, bool)>,
+        changed: Condvar,
+    }
+
+    impl LifecycleGate {
+        fn enter_and_wait(&self) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.0 = true;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+        }
+
+        fn wait_until_entered(&self) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            while !state.0 {
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+        }
+
+        fn release(&self) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.1 = true;
+            self.changed.notify_all();
+        }
     }
 
     impl UnlockedVaultCapability for WrongActiveWorkspaceCapability {
@@ -4441,14 +5097,33 @@ mod production_transition_tests {
             Err(RepositoryPortError::Unavailable)
         }
 
-        fn register_workspace(
+        fn prepare_workspace_registration(
             &self,
-        ) -> Result<Box<dyn RegisteredWorkspaceCapability>, RepositoryPortError> {
-            Ok(Box::new(TestRegisteredWorkspace(
-                self.registered_id
+        ) -> Result<Box<dyn PreparedWorkspaceUnregister>, RepositoryPortError> {
+            Ok(Box::new(TestPreparedWorkspace {
+                id: self
+                    .registered_id
                     .try_duplicate()
                     .map_err(map_host_repository_error)?,
-            )))
+                unregister_calls: Arc::clone(&self.unregister_calls),
+            }))
+        }
+
+        fn commit_workspace_registration(
+            &self,
+            _registration: &mut dyn PreparedWorkspaceUnregister,
+        ) -> Result<(), RepositoryPortError> {
+            if let Some(gate) = &self.commit_gate {
+                gate.enter_and_wait();
+            }
+            Ok(())
+        }
+
+        fn activate_prepared_workspace_registration(
+            &self,
+            _registration: &mut dyn PreparedWorkspaceUnregister,
+        ) -> Result<(), RepositoryPortError> {
+            Ok(())
         }
 
         fn activate_workspace(
@@ -4489,15 +5164,6 @@ mod production_transition_tests {
             Ok(())
         }
 
-        fn unregister_removed_workspace(
-            &self,
-            _active: &mut dyn ActiveWorkspaceCapability,
-            _guard: Box<dyn crate::WorkspaceAbsenceGuard>,
-        ) -> Result<(), RepositoryPortError> {
-            self.unregister_calls.fetch_add(1, Ordering::AcqRel);
-            Ok(())
-        }
-
         fn close(self: Box<Self>) -> Result<(), RepositoryPortError> {
             Ok(())
         }
@@ -4522,6 +5188,13 @@ mod production_transition_tests {
             Err(crate::HostPortError::Unavailable)
         }
 
+        fn confirm_activated(
+            &self,
+            _lease: &crate::WorkspaceLease,
+        ) -> Result<(), crate::HostPortError> {
+            Err(crate::HostPortError::Unavailable)
+        }
+
         fn materialization_target(
             &self,
             _lease: &crate::WorkspaceLease,
@@ -4534,14 +5207,14 @@ mod production_transition_tests {
             &self,
             _lease: &crate::WorkspaceLease,
             _target: crate::MaterializationTarget,
-        ) -> Result<crate::PublishedGeneration, crate::HostPortError> {
+        ) -> Result<crate::MaterializationPublication, crate::HostPortError> {
             Err(crate::HostPortError::Unavailable)
         }
 
         fn arm_published_path(
             &self,
             _lease: &crate::WorkspaceLease,
-            _published: crate::PublishedGeneration,
+            _published: &mut crate::PublishedGeneration,
         ) -> Result<(), crate::HostPortError> {
             Err(crate::HostPortError::Unavailable)
         }
@@ -4572,7 +5245,7 @@ mod production_transition_tests {
 
         fn remove_workspace(
             &self,
-            _lease: crate::WorkspaceLease,
+            _lease: &crate::WorkspaceLease,
         ) -> Result<Box<dyn crate::WorkspaceAbsenceGuard>, crate::HostPortError> {
             Err(crate::HostPortError::Unavailable)
         }
@@ -4874,6 +5547,7 @@ mod production_transition_tests {
             authenticated_count: 1,
             active_id,
             unregister_calls: Arc::clone(&unregister_calls),
+            commit_gate: None,
         };
         let slot = match RootCapabilitySlot::try_new(Box::new(capability)) {
             Ok(slot) => slot,
@@ -4903,6 +5577,7 @@ mod production_transition_tests {
             authenticated_count: MAX_ACTIVE_WORKSPACES + 1,
             active_id,
             unregister_calls: Arc::clone(&unregister_calls),
+            commit_gate: None,
         };
         let slot = match RootCapabilitySlot::try_new(Box::new(capability)) {
             Ok(slot) => slot,
@@ -4926,6 +5601,7 @@ mod production_transition_tests {
         let unregister_calls = Arc::new(AtomicUsize::new(0));
         let provider = Arc::new(WorkspaceBindingProvider {
             response_id: Some(response_id),
+            created: Arc::new(AtomicUsize::new(0)),
             removed: Arc::clone(&removed),
             acquired_absence: Arc::clone(&acquired_absence),
             fail_absence_allocation: false,
@@ -4937,6 +5613,7 @@ mod production_transition_tests {
                 authenticated_count: 0,
                 active_id,
                 unregister_calls: Arc::clone(&unregister_calls),
+                commit_gate: None,
             },
             VaultId::from_bytes([0x83; 16]),
         );
@@ -4963,7 +5640,7 @@ mod production_transition_tests {
     }
 
     #[test]
-    fn rollback_never_pairs_an_absence_guard_with_a_different_active_identity() {
+    fn provider_create_failure_unregisters_the_exact_prepared_identity() {
         let registered_id = workspace_id(0x91);
         let active_id = workspace_id(0x92);
         let removed = Arc::new(AtomicUsize::new(0));
@@ -4971,6 +5648,7 @@ mod production_transition_tests {
         let unregister_calls = Arc::new(AtomicUsize::new(0));
         let provider = Arc::new(WorkspaceBindingProvider {
             response_id: None,
+            created: Arc::new(AtomicUsize::new(0)),
             removed: Arc::clone(&removed),
             acquired_absence: Arc::clone(&acquired_absence),
             fail_absence_allocation: false,
@@ -4982,6 +5660,7 @@ mod production_transition_tests {
                 authenticated_count: 0,
                 active_id,
                 unregister_calls: Arc::clone(&unregister_calls),
+                commit_gate: None,
             },
             VaultId::from_bytes([0x93; 16]),
         );
@@ -4993,17 +5672,167 @@ mod production_transition_tests {
                 crate::WorkspaceMode::Targeted,
                 repository_root.path().canonicalize().unwrap(),
             ),
-            Err(ServiceError::CleanupRequired)
+            Err(ServiceError::ExecutorFailed)
         ));
         assert_eq!(removed.load(Ordering::Acquire), 0);
         assert_eq!(acquired_absence.load(Ordering::Acquire), 1);
-        assert_eq!(unregister_calls.load(Ordering::Acquire), 0);
+        assert_eq!(unregister_calls.load(Ordering::Acquire), 1);
         assert!(
             manager
                 .workspaces
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn post_prepare_request_failure_cleans_immediately_and_reuses_the_bounded_slot() {
+        let registered_id = workspace_id(0x96);
+        let response_id = registered_id.duplicate();
+        let active_id = registered_id.duplicate();
+        let created = Arc::new(AtomicUsize::new(0));
+        let removed = Arc::new(AtomicUsize::new(0));
+        let acquired_absence = Arc::new(AtomicUsize::new(0));
+        let unregister_calls = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(WorkspaceBindingProvider {
+            response_id: Some(response_id),
+            created: Arc::clone(&created),
+            removed: Arc::clone(&removed),
+            acquired_absence: Arc::clone(&acquired_absence),
+            fail_absence_allocation: false,
+        });
+        let manager = unlocked_workspace_manager(
+            provider,
+            WrongActiveWorkspaceCapability {
+                registered_id,
+                authenticated_count: 0,
+                active_id,
+                unregister_calls: Arc::clone(&unregister_calls),
+                commit_gate: None,
+            },
+            VaultId::from_bytes([0x97; 16]),
+        );
+
+        for _ in 0..=MAX_ACTIVE_WORKSPACES {
+            assert!(matches!(
+                manager.create_workspace(
+                    1,
+                    crate::WorkspaceMode::Targeted,
+                    std::path::PathBuf::from("relative-repository"),
+                ),
+                Err(ServiceError::InvalidConfiguration)
+            ));
+            assert!(
+                manager
+                    .cleanup_workspaces
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .is_empty()
+            );
+        }
+        assert_eq!(created.load(Ordering::Acquire), 0);
+        assert_eq!(removed.load(Ordering::Acquire), 0);
+        assert_eq!(
+            acquired_absence.load(Ordering::Acquire),
+            MAX_ACTIVE_WORKSPACES + 1
+        );
+        assert_eq!(
+            unregister_calls.load(Ordering::Acquire),
+            MAX_ACTIVE_WORKSPACES + 1
+        );
+
+        let repository_root = TempDir::new().unwrap();
+        let workspace = manager
+            .create_workspace(
+                1,
+                crate::WorkspaceMode::Targeted,
+                repository_root.path().canonicalize().unwrap(),
+            )
+            .unwrap();
+        manager.remove_workspace(workspace, 1).unwrap();
+        assert_eq!(created.load(Ordering::Acquire), 1);
+        assert_eq!(removed.load(Ordering::Acquire), 1);
+        assert!(
+            manager
+                .cleanup_workspaces
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn lock_after_durable_registration_before_activation_retains_exact_cleanup_authority() {
+        let registered_id = workspace_id(0x94);
+        let response_id = registered_id.duplicate();
+        let active_id = registered_id.duplicate();
+        let created = Arc::new(AtomicUsize::new(0));
+        let removed = Arc::new(AtomicUsize::new(0));
+        let acquired_absence = Arc::new(AtomicUsize::new(0));
+        let unregister_calls = Arc::new(AtomicUsize::new(0));
+        let commit_gate = Arc::new(LifecycleGate::default());
+        let provider = Arc::new(WorkspaceBindingProvider {
+            response_id: Some(response_id),
+            created: Arc::clone(&created),
+            removed: Arc::clone(&removed),
+            acquired_absence: Arc::clone(&acquired_absence),
+            fail_absence_allocation: false,
+        });
+        let manager = unlocked_workspace_manager(
+            provider,
+            WrongActiveWorkspaceCapability {
+                registered_id,
+                authenticated_count: 0,
+                active_id,
+                unregister_calls: Arc::clone(&unregister_calls),
+                commit_gate: Some(Arc::clone(&commit_gate)),
+            },
+            VaultId::from_bytes([0x95; 16]),
+        );
+        let repository_root = TempDir::new().unwrap().keep();
+        let creating = {
+            let manager = Arc::clone(&manager);
+            std::thread::spawn(move || {
+                manager.create_workspace(1, crate::WorkspaceMode::Targeted, repository_root)
+            })
+        };
+
+        commit_gate.wait_until_entered();
+        let root = manager
+            .begin_lock()
+            .expect("unlocked root must be detached");
+        root.begin_close();
+        root.begin_adapter_close();
+        commit_gate.release();
+
+        assert!(matches!(
+            creating.join().expect("workspace worker must not panic"),
+            Err(ServiceError::CleanupRequired)
+        ));
+        let close_failed = manager.close_root_for_lock(Some(&root));
+        manager.finish_lock_after_close(true, close_failed, true);
+        if manager
+            .data
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .state
+            == SessionState::CleanupRequired
+        {
+            manager.retry_cleanup().unwrap();
+        }
+
+        assert_eq!(created.load(Ordering::Acquire), 0);
+        assert_eq!(removed.load(Ordering::Acquire), 0);
+        assert_eq!(acquired_absence.load(Ordering::Acquire), 1);
+        assert_eq!(unregister_calls.load(Ordering::Acquire), 1);
+        assert_eq!(
+            manager
+                .data
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .state,
+            SessionState::Locked
         );
     }
 
@@ -5107,16 +5936,12 @@ mod production_transition_tests {
 
         let store_id = notecrypt_store::cleanup_test_support::workspace_id([0xa1; 16]);
         crate::ports::inject_allocation_failure_after_for_test(0);
-        assert!(matches!(
-            crate::WorkspaceId::from_store(&store_id),
-            Err(crate::HostPortError::AllocationFailed)
-        ));
         let id = crate::WorkspaceId::from_store(&store_id).unwrap();
+        assert_eq!(id.child_name().len(), 32);
+        assert!(crate::ports::allocation_failure_injected_for_test());
         crate::ports::inject_allocation_failure_after_for_test(0);
-        assert!(matches!(
-            id.try_duplicate(),
-            Err(crate::HostPortError::AllocationFailed)
-        ));
+        assert_eq!(id.try_duplicate().unwrap().child_name(), id.child_name());
+        assert!(crate::ports::allocation_failure_injected_for_test());
 
         crate::ports::inject_allocation_failure_after_for_test(0);
         assert!(matches!(
@@ -5143,22 +5968,16 @@ mod production_transition_tests {
         let store_id = notecrypt_store::cleanup_test_support::workspace_id([0xa2; 16]);
         let id = crate::WorkspaceId::from_store(&store_id).unwrap();
 
-        let verifier = StoreWorkspaceAbsenceVerifier::new(provider.clone());
+        let verifier = Arc::new(StoreWorkspaceAbsenceVerifier::new(provider.clone()));
         crate::ports::inject_allocation_failure_after_for_test(0);
         assert_eq!(
-            verifier.stage(&id, Box::new(TestAbsenceGuard)),
-            Err(RepositoryPortError::AllocationFailed)
-        );
-
-        let verifier = StoreWorkspaceAbsenceVerifier::new(provider);
-        crate::ports::inject_allocation_failure_after_for_test(1);
-        assert_eq!(
-            verifier.stage(&id, Box::new(TestAbsenceGuard)),
+            verifier.reserve(&id).map(drop),
             Err(RepositoryPortError::AllocationFailed)
         );
 
         let provider = Arc::new(WorkspaceBindingProvider {
             response_id: None,
+            created: Arc::new(AtomicUsize::new(0)),
             removed: Arc::new(AtomicUsize::new(0)),
             acquired_absence: Arc::new(AtomicUsize::new(0)),
             fail_absence_allocation: true,
@@ -5170,8 +5989,16 @@ mod production_transition_tests {
             ),
             Err(StoreError::AllocationFailed)
         ));
+        assert_eq!(verifier.held_count(), 0);
 
-        let provider = Arc::new(UnavailableWorkspace);
+        let acquired = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(WorkspaceBindingProvider {
+            response_id: None,
+            created: Arc::new(AtomicUsize::new(0)),
+            removed: Arc::new(AtomicUsize::new(0)),
+            acquired_absence: Arc::clone(&acquired),
+            fail_absence_allocation: false,
+        });
         let verifier = StoreWorkspaceAbsenceVerifier::new(provider);
         crate::ports::inject_allocation_failure_after_for_test(0);
         assert!(matches!(
@@ -5180,6 +6007,8 @@ mod production_transition_tests {
             ),
             Err(StoreError::AllocationFailed)
         ));
+        assert_eq!(acquired.load(Ordering::Acquire), 0);
+        assert_eq!(verifier.held_count(), 0);
 
         struct AllocationFailingPublication;
         impl VaultPublicationGuard for AllocationFailingPublication {
@@ -5196,5 +6025,76 @@ mod production_transition_tests {
             map_store_error(error),
             RepositoryPortError::AllocationFailed
         );
+    }
+
+    #[test]
+    fn store_absence_proxy_does_not_release_real_guard_before_unregister_success() {
+        let acquired = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(WorkspaceBindingProvider {
+            response_id: None,
+            created: Arc::new(AtomicUsize::new(0)),
+            removed: Arc::new(AtomicUsize::new(0)),
+            acquired_absence: Arc::clone(&acquired),
+            fail_absence_allocation: false,
+        });
+        let store_id = notecrypt_store::cleanup_test_support::workspace_id([0xb4; 16]);
+        let id = crate::WorkspaceId::from_store(&store_id).unwrap();
+        let verifier = StoreWorkspaceAbsenceVerifier::new(provider);
+
+        let proxy = notecrypt_store::TrustedWorkspaceAbsenceVerifier::acquire_verified_absence(
+            &verifier, &store_id,
+        )
+        .unwrap();
+        assert_eq!(acquired.load(Ordering::Acquire), 1);
+        assert_eq!(verifier.held_count(), 1);
+        drop(proxy);
+        assert_eq!(verifier.held_count(), 1);
+
+        let retry_proxy =
+            notecrypt_store::TrustedWorkspaceAbsenceVerifier::acquire_verified_absence(
+                &verifier, &store_id,
+            )
+            .unwrap();
+        assert_eq!(acquired.load(Ordering::Acquire), 1);
+        drop(retry_proxy);
+        verifier.release_after_unregister(&id).unwrap();
+        assert_eq!(verifier.held_count(), 0);
+    }
+
+    #[test]
+    fn absence_finalize_failure_stays_staged_until_exact_retry_succeeds() {
+        struct RetryFinalizeGuard(Arc<AtomicUsize>);
+
+        impl crate::WorkspaceAbsenceGuard for RetryFinalizeGuard {
+            fn finalize(&mut self) -> Result<(), crate::HostPortError> {
+                if self.0.fetch_add(1, Ordering::AcqRel) == 0 {
+                    Err(crate::HostPortError::CleanupFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let id = crate::WorkspaceId::from_store(
+            &notecrypt_store::cleanup_test_support::workspace_id([0xc5; 16]),
+        )
+        .unwrap();
+        let verifier = Arc::new(StoreWorkspaceAbsenceVerifier::new(Arc::new(
+            UnavailableWorkspace,
+        )));
+        verifier
+            .reserve(&id)
+            .unwrap()
+            .commit(Box::new(RetryFinalizeGuard(Arc::clone(&calls))));
+
+        assert_eq!(
+            verifier.release_after_unregister(&id),
+            Err(RepositoryPortError::CleanupRequired)
+        );
+        assert_eq!(verifier.held_count(), 1);
+        verifier.release_after_unregister(&id).unwrap();
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        assert_eq!(verifier.held_count(), 0);
     }
 }

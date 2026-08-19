@@ -23,6 +23,7 @@ fn layout_uses_only_opaque_components_and_vault_scoped_local_state() {
         names(&vault_local),
         [
             "cleanup-registry",
+            "cleanup-staging",
             "device-slots",
             "journal",
             "replication-quarantine",

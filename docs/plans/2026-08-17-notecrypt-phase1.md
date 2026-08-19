@@ -841,7 +841,8 @@ It retains verified directory and file handles, supports exact-handle no-replace
 Linux publishes from the authenticated descriptor through `/proc/self/fd/<held-fd>` with `linkat(..., AT_SYMLINK_FOLLOW)`, unlinks the private staging name before any journal or head can reference the object, and rejects reachable objects whose link count is not one.
 The repository-filesystem capability probe exercises that exact unprivileged operation and fails closed if procfs or the filesystem primitive is unavailable.
 Apple platforms publish an exact-descriptor copy-on-write clone with `fclonefileat` and fail initialization when the repository filesystem does not support that primitive.
-Windows publishes or replaces through `FILE_RENAME_INFO` on the exact opened source handle.
+Windows publishes through `NtSetInformationFile(FileRenameInformation)` on the exact opened source handle and replaces through `NtSetInformationFile(FileRenameInformationEx)` with replace and POSIX flags.
+The POSIX replacement contract permits the authenticated destination handle to remain live while its name is atomically rebound to the exact source.
 There is no generic path-rename fallback.
 
 Store key material in one revocable key cell owned by the unlocked capability.
@@ -1502,6 +1503,8 @@ The service wraps `validate_stable_source` in the store's `PublicationGuard` so 
 Create workspaces only for a store-reserved `WorkspaceId` below the fixed canonical Notecrypt-owned base.
 The provider never accepts a caller-supplied base or cleanup path.
 It holds a short-lived OS-backed base coordination lock during enumeration and creation and acquires the per-workspace ownership lock before releasing that base lock.
+On Unix, the adapter retains each exact opened lock handle and immediately revalidates the nofollow named identity and link count before and after acquisition and before every protected namespace action.
+An administrator or actively hostile same-UID process racing the final syscall after that readback is outside the Unix namespace integrity boundary.
 `WorkspaceLease` retains the ownership guard until verified removal.
 `cleanup_owned_base` holds the base lock, attempts each ownership lock non-blockingly, removes only acquired workspaces, skips held locks as live, and never treats PID or timestamp metadata as deletion authority.
 Use Unix `flock` or `fcntl` and Windows file-sharing or `LockFileEx` through this service-owned port.
@@ -1694,10 +1697,26 @@ Return `HostPortError` categories without leaking operating-system paths into de
 Create `tests/notecrypt-e2e/src/test_editor.rs` with selectable blocking, unsaved-delay, normal-exit, ignore-termination, and detached behaviors.
 Use that executable from adapter and process-level tests.
 Assert that strict mode rejects detachment and lock terminates the supervised process tree after grace.
+Strict mode is unavailable on macOS and any platform that cannot enforce descendant containment.
+Unix process groups support trusted-editor blocking behavior, but cannot prove containment when a descendant calls `setsid`.
+Windows strict supervision requires suspended process creation, Job Object assignment before resume, and verified empty-job reaping.
+System Notepad remains blocking-only because its packaged invocation can broker outside the launched process tree; strict Windows profile admission is limited to an exact test capability or the protected Notepad++ multi-instance profile.
+Linux strict supervision remains disabled until subreaper, pidfd, or equivalent discovery, termination, and reaping is proven by EZE tests.
+Unknown editor profiles fail closed in every mode during Phase 1.
+Explicit `editor.command`, `$VISUAL`, and `$EDITOR` select only precedence among supported profiles and never authorize an arbitrary executable.
+Basename alone never grants a supported profile.
+Resolve one canonical absolute executable capability before profile assignment, retain its exact identity, and revalidate that identity immediately before spawn.
+On Unix and macOS, require the executable and every canonical ancestor to be root-owned, not writable by group or other users, and free of extended access ACLs.
+On Windows, require a non-reparse executable beneath an approved protected system or program installation root with verified owner and DACL protection.
+Keep the EZE helper behind an exact identity-bound test-only capability that is not compiled into production.
+Reject all optional configured editor arguments in Phase 1 until a profile-specific positive safety contract is proven.
+An observed or unproven process escape retains the workspace and enters `CleanupRequired` until natural exit or proven quiescence.
 
 - [ ] **Step 4: Implement editor profiles and supervision**
 
 Resolve explicit `editor.command` first and `$VISUAL` then `$EDITOR` when unset.
+Reject the resolved command unless its profile and arguments match a supported blocking contract.
+Attest the exact resolved executable before assigning the profile, and spawn only its retained canonical path after immediate identity revalidation.
 Provide blocking profiles for Vim, Neovim, Nano, Emacs client, Visual Studio Code, Zed, Windows Notepad, and Notepad++.
 When no editor is configured, use `vi` on macOS and Linux and Notepad on Windows after verifying the executable can be launched in blocking mode.
 Pass the path as a direct process argument and never through a shell.

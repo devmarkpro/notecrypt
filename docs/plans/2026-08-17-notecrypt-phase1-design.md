@@ -189,7 +189,8 @@ Immutable publication consumes the exact authenticated descriptor.
 Linux uses the unprivileged exact-descriptor `/proc/self/fd/<held-fd>` plus `linkat(..., AT_SYMLINK_FOLLOW)` flow followed by removal of the private staging name, requires link count one before an object is reachable, and treats a crash between those steps as recoverable unpublished staging.
 Initialization probes that exact operation on the target filesystem and fails closed when procfs or the link primitive is unavailable.
 Apple platforms use exact-descriptor `fclonefileat` copy-on-write publication.
-Windows uses `FILE_RENAME_INFO` on the exact opened handle.
+Windows uses `NtSetInformationFile(FileRenameInformation)` for exact-handle no-replace publication and `NtSetInformationFile(FileRenameInformationEx)` with replace and POSIX flags for exact-handle mutable replacement.
+The POSIX replacement contract permits the authenticated destination handle to remain live while its name is atomically rebound to the exact source.
 Unix and Apple mutable replacement retains the authenticated source handle, uses unpredictable names inside a verified private `0700` staging directory under the OS mutation lock, rechecks source and destination identities immediately before atomic path replacement, and immediately reopens and authenticates the destination.
 An operating-system administrator or actively malicious same-UID process racing the final path syscall is outside the integrity guarantee because these platforms provide no atomic replace-existing operation from an already-open source descriptor.
 Persistent local substitution remains detectable during immediate readback or the next unlock.
@@ -473,7 +474,21 @@ The user selects one logical file through the TUI or CLI.
 After successful unlock, Notecrypt authenticates the selected revision and decrypts only that file into a random restricted workspace outside the repository.
 Notecrypt launches a configured editor command that must remain attached until editing is complete.
 Built-in profiles supply blocking flags for common GUI editors.
-Strict mode rejects editor commands that detach and cannot be supervised.
+Unknown editor profiles fail closed in every mode during Phase 1.
+Explicit configuration, `$VISUAL`, and `$EDITOR` select only precedence among supported profiles and never authorize an arbitrary executable.
+Basename alone never grants a supported profile.
+Phase 1 resolves a command to one canonical absolute executable capability before profile assignment and revalidates that exact identity immediately before spawn.
+On Unix and macOS, the executable and every canonical ancestor must be owned by root, must not be writable by group or other users, and must not carry an extended access ACL.
+On Windows, the executable must be non-reparse beneath an approved protected system or program installation root and must pass owner and DACL verification.
+If a supported installation cannot satisfy the platform attestation, Notecrypt fails closed and asks the user to configure a protected supported installation.
+The EZE helper uses an exact identity-bound test-only exception that is absent from production builds.
+Phase 1 rejects every optional configured editor argument because no per-profile optional-argument safety contract is yet proven.
+Strict mode is unavailable on macOS and any platform without enforceable descendant containment.
+Unix process groups support trusted-editor blocking behavior but cannot prove containment after a descendant calls `setsid`.
+Windows strict mode requires suspended creation, Job Object assignment before resume, and verified empty-job reaping.
+System Notepad remains blocking-only because its packaged invocation can broker outside the launched process tree; strict Windows profile admission is limited to an exact test capability or the protected Notepad++ multi-instance profile.
+Linux strict mode remains disabled until stronger descendant discovery, termination, and reaping is proven by EZE tests.
+An observed or unproven process escape retains the workspace and enters `CleanupRequired` until natural exit or proven quiescence.
 
 The workspace watcher debounces independently per logical path and waits until a write is stable across a bounded quiet interval.
 It treats in-place writes, truncate-and-rewrite saves, and temporary-file rename saves as equivalent candidates.
@@ -529,6 +544,8 @@ The store owns only CSPRNG identity issuance and authenticated linear `Registere
 The service and workspace adapter own the canonical fixed base, OS-backed coordination and ownership locks, permission checks, enumeration, and nofollow physical deletion.
 Workspace enumeration and creation hold a short-lived OS-backed base coordination lock.
 Workspace creation acquires a per-workspace OS-backed ownership lock while still holding the base lock and retains ownership for the entire plaintext lifetime through verified removal.
+On Unix, each lock retains its exact opened handle and immediately revalidates the nofollow named identity and link count before and after acquisition and before every protected namespace action.
+An administrator or actively hostile same-UID process racing the final syscall after that readback is outside the Unix namespace integrity boundary because the host does not provide an atomic name-to-held-lock comparison and mutation primitive.
 Workspace creation follows reserve, register, base lock, create and acquire ownership, activate, release base lock, then materialize ordering.
 The unlocked store capability reserves the identity and writes an authenticated registered cleanup record before the adapter creates the directory, then activates the record only after the adapter verifies restrictive permissions and base containment.
 Cleanup follows remove, verify absent, and unregister ordering, and only the store capability may authenticate or change the record state.

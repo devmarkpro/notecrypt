@@ -34,7 +34,11 @@ impl WorkspaceOwnershipGuard for OwnershipGuard {}
 
 struct AbsenceGuard;
 
-impl WorkspaceAbsenceGuard for AbsenceGuard {}
+impl WorkspaceAbsenceGuard for AbsenceGuard {
+    fn finalize(&mut self) -> Result<(), HostPortError> {
+        Ok(())
+    }
+}
 
 struct TargetResolver;
 
@@ -110,6 +114,10 @@ impl WorkspaceProvider for StableSourceWorkspace {
         Err(HostPortError::Unavailable)
     }
 
+    fn confirm_activated(&self, _lease: &WorkspaceLease) -> Result<(), HostPortError> {
+        Ok(())
+    }
+
     fn materialization_target(
         &self,
         _lease: &WorkspaceLease,
@@ -122,14 +130,14 @@ impl WorkspaceProvider for StableSourceWorkspace {
         &self,
         _lease: &WorkspaceLease,
         _target: notecrypt_service::MaterializationTarget,
-    ) -> Result<notecrypt_service::PublishedGeneration, HostPortError> {
+    ) -> Result<notecrypt_service::MaterializationPublication, HostPortError> {
         Err(HostPortError::Unavailable)
     }
 
     fn arm_published_path(
         &self,
         _lease: &WorkspaceLease,
-        _published: notecrypt_service::PublishedGeneration,
+        _published: &mut notecrypt_service::PublishedGeneration,
     ) -> Result<(), HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -190,7 +198,7 @@ impl WorkspaceProvider for StableSourceWorkspace {
 
     fn remove_workspace(
         &self,
-        _lease: WorkspaceLease,
+        _lease: &WorkspaceLease,
     ) -> Result<Box<dyn WorkspaceAbsenceGuard>, HostPortError> {
         self.probe.remove_calls.fetch_add(1, Ordering::AcqRel);
         if self
@@ -568,7 +576,11 @@ fn two_workspace_cleanup_failure_is_retryable_after_root_revocation() {
         service.snapshot().session_state(),
         notecrypt_service::SessionState::Locked
     );
-    assert_eq!(probe.remove_calls.load(Ordering::Acquire), 2);
+    assert_eq!(
+        probe.remove_calls.load(Ordering::Acquire),
+        3,
+        "the exact failed workspace is retained and retried once"
+    );
     assert_eq!(probe.base_residue.load(Ordering::Acquire), 0);
     assert!(probe.cleanup_calls.load(Ordering::Acquire) >= 2);
 }

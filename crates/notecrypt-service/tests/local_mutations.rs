@@ -78,6 +78,10 @@ impl WorkspaceProvider for UnavailableWorkspace {
         Err(HostPortError::Unavailable)
     }
 
+    fn confirm_activated(&self, _lease: &WorkspaceLease) -> Result<(), HostPortError> {
+        Ok(())
+    }
+
     fn materialization_target(
         &self,
         _lease: &WorkspaceLease,
@@ -90,14 +94,14 @@ impl WorkspaceProvider for UnavailableWorkspace {
         &self,
         _lease: &WorkspaceLease,
         _target: notecrypt_service::MaterializationTarget,
-    ) -> Result<notecrypt_service::PublishedGeneration, HostPortError> {
+    ) -> Result<notecrypt_service::MaterializationPublication, HostPortError> {
         Err(HostPortError::Unavailable)
     }
 
     fn arm_published_path(
         &self,
         _lease: &WorkspaceLease,
-        _published: notecrypt_service::PublishedGeneration,
+        _published: &mut notecrypt_service::PublishedGeneration,
     ) -> Result<(), HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -128,7 +132,7 @@ impl WorkspaceProvider for UnavailableWorkspace {
 
     fn remove_workspace(
         &self,
-        _lease: WorkspaceLease,
+        _lease: &WorkspaceLease,
     ) -> Result<Box<dyn notecrypt_service::WorkspaceAbsenceGuard>, HostPortError> {
         Err(HostPortError::Unavailable)
     }
@@ -235,11 +239,25 @@ impl notecrypt_service::UnlockedVaultCapability for ObservedCapability {
         self.inner.begin_compromise_rekey(request, cancel)
     }
 
-    fn register_workspace(
+    fn prepare_workspace_registration(
         &self,
-    ) -> Result<Box<dyn notecrypt_service::RegisteredWorkspaceCapability>, RepositoryPortError>
-    {
-        self.inner.register_workspace()
+    ) -> Result<Box<dyn notecrypt_service::PreparedWorkspaceUnregister>, RepositoryPortError> {
+        self.inner.prepare_workspace_registration()
+    }
+
+    fn commit_workspace_registration(
+        &self,
+        registration: &mut dyn notecrypt_service::PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
+        self.inner.commit_workspace_registration(registration)
+    }
+
+    fn activate_prepared_workspace_registration(
+        &self,
+        registration: &mut dyn notecrypt_service::PreparedWorkspaceUnregister,
+    ) -> Result<(), RepositoryPortError> {
+        self.inner
+            .activate_prepared_workspace_registration(registration)
     }
 
     fn activate_workspace(
@@ -262,14 +280,6 @@ impl notecrypt_service::UnlockedVaultCapability for ObservedCapability {
         self.inner.unregister_absent_workspace(active)
     }
 
-    fn unregister_removed_workspace(
-        &self,
-        active: &mut dyn notecrypt_service::ActiveWorkspaceCapability,
-        guard: Box<dyn notecrypt_service::WorkspaceAbsenceGuard>,
-    ) -> Result<(), RepositoryPortError> {
-        self.inner.unregister_removed_workspace(active, guard)
-    }
-
     fn close(self: Box<Self>) -> Result<(), RepositoryPortError> {
         self.inner.close()
     }
@@ -284,6 +294,28 @@ impl OperationExecutor for RejectingExecutor {
         _context: &OperationContext,
     ) -> Result<OperationResult, ServiceError> {
         Err(ServiceError::ExecutorFailed)
+    }
+}
+
+struct LockCompletionObserver {
+    completed: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl OperationExecutor for LockCompletionObserver {
+    fn execute(
+        &self,
+        _command: Command,
+        _context: &OperationContext,
+    ) -> Result<OperationResult, ServiceError> {
+        Err(ServiceError::ExecutorFailed)
+    }
+
+    fn control(&self, control: notecrypt_service::Control) {
+        if control == notecrypt_service::Control::LockNow
+            && let Some(completed) = self.completed.lock().unwrap().take()
+        {
+            completed.send(()).expect("lock observer remains alive");
+        }
     }
 }
 
@@ -330,6 +362,22 @@ fn service_for_roots_with_config_external(
     config: ServiceConfig,
     external_files: Arc<dyn ExternalFileProvider>,
 ) -> ServiceHandle {
+    service_for_roots_with_config_external_executor(
+        repository_root,
+        local_root,
+        config,
+        external_files,
+        Arc::new(RejectingExecutor),
+    )
+}
+
+fn service_for_roots_with_config_external_executor(
+    repository_root: &std::path::Path,
+    local_root: &std::path::Path,
+    config: ServiceConfig,
+    external_files: Arc<dyn ExternalFileProvider>,
+    executor: Arc<dyn OperationExecutor>,
+) -> ServiceHandle {
     let workspace: Arc<dyn WorkspaceProvider> = Arc::new(UnavailableWorkspace);
     let repository = StoreVaultRepository::open(
         LocalVaultConfig::try_new(
@@ -358,7 +406,7 @@ fn service_for_roots_with_config_external(
     .with_external_files(external_files);
     ServiceHandle::with_local_use_cases(
         config,
-        Arc::new(RejectingExecutor),
+        executor,
         Arc::new(notecrypt_service::OsOperationIdRandom),
         components,
     )
@@ -1845,8 +1893,16 @@ fn saturated_mutation_queue_cannot_delay_priority_lock_behind_blocked_export() {
         published: Arc::new(AtomicBool::new(false)),
     });
     let config = ServiceConfig::new(1, 1, 16, 16, 8, 8).unwrap();
-    let reopened =
-        service_for_roots_with_config_external(&repository_root, &local_root, config, provider);
+    let (completed_sender, completed_receiver) = mpsc::channel();
+    let reopened = service_for_roots_with_config_external_executor(
+        &repository_root,
+        &local_root,
+        config,
+        provider,
+        Arc::new(LockCompletionObserver {
+            completed: Mutex::new(Some(completed_sender)),
+        }),
+    );
     reopened.unlock_with_recovery(secret()).unwrap();
     let destination_root = TempDir::new().unwrap();
     let export = reopened
@@ -1893,9 +1949,19 @@ fn saturated_mutation_queue_cannot_delay_priority_lock_behind_blocked_export() {
             .unwrap();
     });
     let lock_result = locked_receiver.recv_timeout(Duration::from_secs(3));
+    assert_eq!(lock_result.unwrap(), Ok(()));
+    let transition = reopened.snapshot();
+    assert!(
+        matches!(
+            transition.session_state(),
+            notecrypt_service::SessionState::Locking | notecrypt_service::SessionState::Locked
+        ),
+        "priority lock must synchronously begin or complete the lock transition"
+    );
+    assert!(!transition.accepting_operations());
+    assert!(!transition.key_leases_open());
     release_sender.send(()).unwrap();
     lock_thread.join().unwrap();
-    assert_eq!(lock_result.unwrap(), Ok(()));
     assert_eq!(
         export.wait_result(Duration::from_secs(5)),
         Err(ServiceError::Cancelled)
@@ -1907,6 +1973,9 @@ fn saturated_mutation_queue_cannot_delay_priority_lock_behind_blocked_export() {
         );
     }
     assert!(aborted.load(Ordering::Acquire));
+    completed_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("lock observer runs after cleanup completion");
     assert_eq!(
         reopened.snapshot().session_state(),
         notecrypt_service::SessionState::Locked

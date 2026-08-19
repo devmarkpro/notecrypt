@@ -127,7 +127,7 @@ impl<'a> DurableBatch<'a> {
             .map_err(|_| StoreError::LimitExceeded)?;
         self.staged_ids.insert(id);
         let name = component(&encode_hex(id.as_bytes()))?;
-        let mut file = match self.staging.create_file_new(&name) {
+        let mut file = match self.staging.create_private_file_new(&name) {
             Ok(file) => file,
             Err(error) => {
                 self.staged_ids.remove(&id);
@@ -141,7 +141,7 @@ impl<'a> DurableBatch<'a> {
             let staged = self.staged.last().ok_or(StoreError::InvalidCapability)?;
             let cleanup = self
                 .staging
-                .remove_file_from_private_staging_unsynced(&staged.name);
+                .remove_untrusted_file_from_private_staging_unsynced(&staged.name);
             return match cleanup {
                 Ok(()) => {
                     self.staged.pop();
@@ -300,7 +300,7 @@ impl<'a> DurableBatch<'a> {
                     existing.seek(SeekFrom::Start(0))?;
                     compare_streams(&mut opened, &mut existing)?;
                     self.staging
-                        .remove_file_from_private_staging_unsynced(&staged.name)?;
+                        .remove_untrusted_file_from_private_staging_unsynced(&staged.name)?;
                     metrics.exact_existing = checked_increment(metrics.exact_existing)?;
                 }
                 Err(error) => return Err(StoreError::from(error)),
@@ -327,7 +327,7 @@ impl<'a> DurableBatch<'a> {
         for staged in &self.staged {
             match self
                 .staging
-                .remove_file_from_private_staging_unsynced(&staged.name)
+                .remove_untrusted_file_from_private_staging_unsynced(&staged.name)
             {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -337,7 +337,7 @@ impl<'a> DurableBatch<'a> {
         for replacement in &self.replacements {
             match self
                 .staging
-                .remove_file_from_private_staging_unsynced(replacement)
+                .remove_untrusted_file_from_private_staging_unsynced(replacement)
             {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -397,7 +397,7 @@ impl PublishedBatch<'_> {
             .replacements
             .try_reserve(1)
             .map_err(|_| StoreError::LimitExceeded)?;
-        let mut file = self.batch.staging.create_file_new(&name)?;
+        let mut file = self.batch.staging.create_private_file_new(&name)?;
         self.batch.replacements.push(name);
         if let Err(primary) = copy_exact_bounded(source, &mut file, declared_length) {
             return self.remove_failed_replacement(primary);
@@ -458,7 +458,7 @@ impl PublishedBatch<'_> {
         match self
             .batch
             .staging
-            .remove_file_from_private_staging_unsynced(name)
+            .remove_untrusted_file_from_private_staging_unsynced(name)
         {
             Ok(()) => {
                 self.batch.replacements.pop();
@@ -844,6 +844,11 @@ mod tests {
             Ok(())
         });
         assert!(matches!(result, Err(StoreError::AuthenticationFailed)));
+        assert_eq!(
+            std::fs::read(&original_path).expect("read moved original"),
+            b"authenticated"
+        );
+        assert_eq!(transaction_operation_count(repository.path()), 0);
         assert!(
             !repository
                 .path()
