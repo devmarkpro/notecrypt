@@ -1,0 +1,95 @@
+error[E0277]: `RecoverySecretInput` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:10:21
+   |
+10 |     require_debug::<RecoverySecretInput>();
+   |                     ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoverySecretInput`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `RecoverySecretPresentation` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:11:21
+   |
+11 |     require_debug::<RecoverySecretPresentation>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoverySecretPresentation`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `DeviceUnlockSecret` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:12:21
+   |
+12 |     require_debug::<DeviceUnlockSecret>();
+   |                     ^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceUnlockSecret`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `PendingRecoveryInitialization` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:13:21
+   |
+13 |     require_debug::<PendingRecoveryInitialization>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `PendingRecoveryInitialization`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `PendingCompromiseRekey` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:14:21
+   |
+14 |     require_debug::<PendingCompromiseRekey>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `PendingCompromiseRekey`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `PendingFreshnessAcknowledgement` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:15:21
+   |
+15 |     require_debug::<PendingFreshnessAcknowledgement>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `PendingFreshnessAcknowledgement`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `StableSourceToken` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:16:21
+   |
+16 |     require_debug::<StableSourceToken>();
+   |                     ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `StableSourceToken`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `FinalSaveGuard` doesn't implement `Debug`
+  --> tests/compile_fail/no_debug.rs:17:21
+   |
+17 |     require_debug::<FinalSaveGuard>();
+   |                     ^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `FinalSaveGuard`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/no_debug.rs:7:21
+   |
+ 7 | fn require_debug<T: std::fmt::Debug>() {}
+   |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`

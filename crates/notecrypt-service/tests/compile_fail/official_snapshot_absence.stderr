@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `PendingRecoveryInitialization` found for struct `ServiceSnapshot` in the current scope
+ --> tests/compile_fail/official_snapshot_absence.rs:4:22
+  |
+4 |     ServiceSnapshot::PendingRecoveryInitialization(pending)
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `ServiceSnapshot`

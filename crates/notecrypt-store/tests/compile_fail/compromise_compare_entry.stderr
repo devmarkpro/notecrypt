@@ -1,0 +1,13 @@
+error[E0369]: binary operation `==` cannot be applied to type `AuthenticatedLogicalEntry`
+ --> tests/compile_fail/compromise_compare_entry.rs:4:18
+  |
+4 |     let _ = left == right;
+  |             ---- ^^ ----- AuthenticatedLogicalEntry
+  |             |
+  |             AuthenticatedLogicalEntry
+  |
+note: `AuthenticatedLogicalEntry` does not implement `PartialEq`
+ --> src/compromise.rs
+  |
+  | pub struct AuthenticatedLogicalEntry {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AuthenticatedLogicalEntry` is defined in another crate

@@ -1,0 +1,51 @@
+error[E0277]: can't compare `VerifiedReachableHead` with `VerifiedReachableHead`
+ --> tests/compile_fail/reachability_equality.rs:9:25
+  |
+9 |     requires_equality::<VerifiedReachableHead>();
+  |                         ^^^^^^^^^^^^^^^^^^^^^ no implementation for `VerifiedReachableHead == VerifiedReachableHead`
+  |
+  = help: the trait `PartialEq` is not implemented for `VerifiedReachableHead`
+note: required by a bound in `requires_equality`
+ --> tests/compile_fail/reachability_equality.rs:6:25
+  |
+6 | fn requires_equality<T: PartialEq>() {}
+  |                         ^^^^^^^^^ required by this bound in `requires_equality`
+
+error[E0277]: can't compare `CommittedReachableHead` with `CommittedReachableHead`
+  --> tests/compile_fail/reachability_equality.rs:10:25
+   |
+10 |     requires_equality::<CommittedReachableHead>();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^ no implementation for `CommittedReachableHead == CommittedReachableHead`
+   |
+   = help: the trait `PartialEq` is not implemented for `CommittedReachableHead`
+note: required by a bound in `requires_equality`
+  --> tests/compile_fail/reachability_equality.rs:6:25
+   |
+ 6 | fn requires_equality<T: PartialEq>() {}
+   |                         ^^^^^^^^^ required by this bound in `requires_equality`
+
+error[E0277]: can't compare `PendingRemotePublication` with `PendingRemotePublication`
+  --> tests/compile_fail/reachability_equality.rs:11:25
+   |
+11 |     requires_equality::<PendingRemotePublication>();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `PendingRemotePublication == PendingRemotePublication`
+   |
+   = help: the trait `PartialEq` is not implemented for `PendingRemotePublication`
+note: required by a bound in `requires_equality`
+  --> tests/compile_fail/reachability_equality.rs:6:25
+   |
+ 6 | fn requires_equality<T: PartialEq>() {}
+   |                         ^^^^^^^^^ required by this bound in `requires_equality`
+
+error[E0277]: can't compare `PendingUnprovableRemote` with `PendingUnprovableRemote`
+  --> tests/compile_fail/reachability_equality.rs:12:25
+   |
+12 |     requires_equality::<PendingUnprovableRemote>();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `PendingUnprovableRemote == PendingUnprovableRemote`
+   |
+   = help: the trait `PartialEq` is not implemented for `PendingUnprovableRemote`
+note: required by a bound in `requires_equality`
+  --> tests/compile_fail/reachability_equality.rs:6:25
+   |
+ 6 | fn requires_equality<T: PartialEq>() {}
+   |                         ^^^^^^^^^ required by this bound in `requires_equality`

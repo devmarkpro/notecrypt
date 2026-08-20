@@ -1,0 +1,23 @@
+error: cannot construct `VerifiedReachableHead` with struct literal syntax due to private fields
+ --> tests/compile_fail/reachability_construct.rs:7:13
+  |
+7 |     let _ = VerifiedReachableHead {};
+  |             ^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot construct `CommittedReachableHead` with struct literal syntax due to private fields
+ --> tests/compile_fail/reachability_construct.rs:8:13
+  |
+8 |     let _ = CommittedReachableHead {};
+  |             ^^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot construct `PendingRemotePublication` with struct literal syntax due to private fields
+ --> tests/compile_fail/reachability_construct.rs:9:13
+  |
+9 |     let _ = PendingRemotePublication {};
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot construct `PendingUnprovableRemote` with struct literal syntax due to private fields
+  --> tests/compile_fail/reachability_construct.rs:10:13
+   |
+10 |     let _ = PendingUnprovableRemote {};
+   |             ^^^^^^^^^^^^^^^^^^^^^^^

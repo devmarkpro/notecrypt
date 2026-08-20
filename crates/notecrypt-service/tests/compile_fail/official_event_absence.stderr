@@ -1,0 +1,5 @@
+error[E0599]: no variant, associated function, or constant named `DeviceUnlockSecret` found for enum `OperationEvent` in the current scope
+ --> tests/compile_fail/official_event_absence.rs:4:21
+  |
+4 |     OperationEvent::DeviceUnlockSecret(secret)
+  |                     ^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `OperationEvent`

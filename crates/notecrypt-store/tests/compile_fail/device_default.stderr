@@ -1,0 +1,71 @@
+error[E0277]: the trait bound `DeviceEnrollment: Default` is not satisfied
+ --> tests/compile_fail/device_default.rs:9:22
+  |
+9 |     assert_default::<DeviceEnrollment>();
+  |                      ^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `DeviceEnrollment`
+  |
+note: required by a bound in `assert_default`
+ --> tests/compile_fail/device_default.rs:6:22
+  |
+6 | fn assert_default<T: Default>() {}
+  |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `DeviceProvider: Default` is not satisfied
+  --> tests/compile_fail/device_default.rs:10:22
+   |
+10 |     assert_default::<DeviceProvider>();
+   |                      ^^^^^^^^^^^^^^ the trait `Default` is not implemented for `DeviceProvider`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/device_default.rs:6:22
+   |
+ 6 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `DeviceReference: Default` is not satisfied
+  --> tests/compile_fail/device_default.rs:11:22
+   |
+11 |     assert_default::<DeviceReference>();
+   |                      ^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `DeviceReference`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/device_default.rs:6:22
+   |
+ 6 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `ActiveDeviceSlot: Default` is not satisfied
+  --> tests/compile_fail/device_default.rs:12:22
+   |
+12 |     assert_default::<ActiveDeviceSlot>();
+   |                      ^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `ActiveDeviceSlot`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/device_default.rs:6:22
+   |
+ 6 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `DisabledDeviceSlotPendingProviderRemoval: Default` is not satisfied
+  --> tests/compile_fail/device_default.rs:13:22
+   |
+13 |     assert_default::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/device_default.rs:6:22
+   |
+ 6 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`
+
+error[E0277]: the trait bound `UntrustedDeviceSlotCandidate: Default` is not satisfied
+  --> tests/compile_fail/device_default.rs:14:22
+   |
+14 |     assert_default::<UntrustedDeviceSlotCandidate>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `UntrustedDeviceSlotCandidate`
+   |
+note: required by a bound in `assert_default`
+  --> tests/compile_fail/device_default.rs:6:22
+   |
+ 6 | fn assert_default<T: Default>() {}
+   |                      ^^^^^^^ required by this bound in `assert_default`

@@ -1,0 +1,7 @@
+error[E0451]: field `value` of struct `RecoverySecretInput` is private
+ --> tests/compile_fail/recovery_input_private_construction.rs:5:9
+  |
+4 |     RecoverySecretInput {
+  |     ------------------- in this type
+5 |         value: zeroize::Zeroizing::new(value),
+  |         ^^^^^ private field

@@ -1,0 +1,71 @@
+error[E0277]: `DeviceProvider` doesn't implement `std::fmt::Display`
+ --> tests/compile_fail/device_display.rs:9:22
+  |
+9 |     assert_display::<DeviceProvider>();
+  |                      ^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceProvider`
+  |
+note: required by a bound in `assert_display`
+ --> tests/compile_fail/device_display.rs:6:22
+  |
+6 | fn assert_display<T: std::fmt::Display>() {}
+  |                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DeviceReference` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/device_display.rs:10:22
+   |
+10 |     assert_display::<DeviceReference>();
+   |                      ^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceReference`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/device_display.rs:6:22
+   |
+ 6 | fn assert_display<T: std::fmt::Display>() {}
+   |                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `UntrustedDeviceSlotCandidate` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/device_display.rs:11:22
+   |
+11 |     assert_display::<UntrustedDeviceSlotCandidate>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `UntrustedDeviceSlotCandidate`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/device_display.rs:6:22
+   |
+ 6 | fn assert_display<T: std::fmt::Display>() {}
+   |                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DeviceEnrollment` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/device_display.rs:12:22
+   |
+12 |     assert_display::<DeviceEnrollment>();
+   |                      ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceEnrollment`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/device_display.rs:6:22
+   |
+ 6 | fn assert_display<T: std::fmt::Display>() {}
+   |                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ActiveDeviceSlot` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/device_display.rs:13:22
+   |
+13 |     assert_display::<ActiveDeviceSlot>();
+   |                      ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ActiveDeviceSlot`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/device_display.rs:6:22
+   |
+ 6 | fn assert_display<T: std::fmt::Display>() {}
+   |                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DisabledDeviceSlotPendingProviderRemoval` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/device_display.rs:14:22
+   |
+14 |     assert_display::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/device_display.rs:6:22
+   |
+ 6 | fn assert_display<T: std::fmt::Display>() {}
+   |                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_display`

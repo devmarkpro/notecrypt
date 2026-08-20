@@ -1,0 +1,23 @@
+error[E0616]: field `binding` of struct `VerifiedReachableHead` is private
+ --> tests/compile_fail/reachability_field.rs:7:19
+  |
+7 |     let _ = value.binding;
+  |                   ^^^^^^^ private field
+
+error[E0616]: field `binding` of struct `CommittedReachableHead` is private
+  --> tests/compile_fail/reachability_field.rs:11:19
+   |
+11 |     let _ = value.binding;
+   |                   ^^^^^^^ private field
+
+error[E0609]: no field `binding` on type `PendingRemotePublication`
+  --> tests/compile_fail/reachability_field.rs:15:19
+   |
+15 |     let _ = value.binding;
+   |                   ^^^^^^^ unknown field
+
+error[E0609]: no field `context` on type `PendingUnprovableRemote`
+  --> tests/compile_fail/reachability_field.rs:19:19
+   |
+19 |     let _ = value.context;
+   |                   ^^^^^^^ unknown field

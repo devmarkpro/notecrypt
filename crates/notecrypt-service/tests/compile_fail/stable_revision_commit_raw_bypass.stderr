@@ -1,0 +1,14 @@
+error[E0599]: no method named `commit_streamed_revision` found for mutable reference `&mut dyn LocalVaultLease` in the current scope
+ --> tests/compile_fail/stable_revision_commit_raw_bypass.rs:9:19
+  |
+9 |     let _ = lease.commit_streamed_revision(request, &mut source, guard);
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+help: there is a method `commit_stable_revision` with a similar name, but with different arguments
+ --> src/session.rs
+  |
+  | /     fn commit_stable_revision(
+  | |         &mut self,
+  | |         commit: StableRevisionCommit<'_>,
+  | |     ) -> Result<LocalSnapshot, RepositoryPortError>;
+  | |____________________________________________________^

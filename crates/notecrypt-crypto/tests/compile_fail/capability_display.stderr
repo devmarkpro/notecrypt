@@ -1,0 +1,407 @@
+error[E0277]: `RecoveryPassphrase` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:17:22
+   |
+17 |     assert_display::<RecoveryPassphrase>();
+   |                      ^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `RecoveryPassphrase`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `RecoveryPhrase` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:18:22
+   |
+18 |     assert_display::<RecoveryPhrase>();
+   |                      ^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `RecoveryPhrase`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `VaultRootKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:19:22
+   |
+19 |     assert_display::<VaultRootKey>();
+   |                      ^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `VaultRootKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `RecoveryWrappingKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:20:22
+   |
+20 |     assert_display::<RecoveryWrappingKey>();
+   |                      ^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `RecoveryWrappingKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `MetadataKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:21:22
+   |
+21 |     assert_display::<MetadataKey>();
+   |                      ^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `MetadataKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `SnapshotAuthenticationKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:22:22
+   |
+22 |     assert_display::<SnapshotAuthenticationKey>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `SnapshotAuthenticationKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ChunkFingerprintKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:23:22
+   |
+23 |     assert_display::<ChunkFingerprintKey>();
+   |                      ^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ChunkFingerprintKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ContentWrappingKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:24:22
+   |
+24 |     assert_display::<ContentWrappingKey>();
+   |                      ^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ContentWrappingKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `LocalVerificationKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:25:22
+   |
+25 |     assert_display::<LocalVerificationKey>();
+   |                      ^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `LocalVerificationKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DeviceWrappingKey` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:26:22
+   |
+26 |     assert_display::<DeviceWrappingKey>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceWrappingKey`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `RecoverySlotPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:27:22
+   |
+27 |     assert_display::<RecoverySlotPlaintext>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `RecoverySlotPlaintext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DeviceSlotPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:28:22
+   |
+28 |     assert_display::<DeviceSlotPlaintext>();
+   |                      ^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceSlotPlaintext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `MetadataPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:29:22
+   |
+29 |     assert_display::<MetadataPlaintext>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `MetadataPlaintext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `TreePlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:30:22
+   |
+30 |     assert_display::<TreePlaintext>();
+   |                      ^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `TreePlaintext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ManifestPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:31:22
+   |
+31 |     assert_display::<ManifestPlaintext>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ManifestPlaintext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `SnapshotPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:32:22
+   |
+32 |     assert_display::<SnapshotPlaintext>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `SnapshotPlaintext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ProtectedBytes` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:33:22
+   |
+33 |     assert_display::<ProtectedBytes>();
+   |                      ^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ProtectedBytes`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `RecoverySlotContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:34:22
+   |
+34 |     assert_display::<RecoverySlotContext>();
+   |                      ^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `RecoverySlotContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DeviceSlotContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:35:22
+   |
+35 |     assert_display::<DeviceSlotContext>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceSlotContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `MetadataContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:36:22
+   |
+36 |     assert_display::<MetadataContext>();
+   |                      ^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `MetadataContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `TreeContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:37:22
+   |
+37 |     assert_display::<TreeContext>();
+   |                      ^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `TreeContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ManifestContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:38:22
+   |
+38 |     assert_display::<ManifestContext>();
+   |                      ^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ManifestContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `SnapshotContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:39:22
+   |
+39 |     assert_display::<SnapshotContext>();
+   |                      ^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `SnapshotContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `AuthenticatedHeadContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:40:22
+   |
+40 |     assert_display::<AuthenticatedHeadContext>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `AuthenticatedHeadContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `LocalStateContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:41:22
+   |
+41 |     assert_display::<LocalStateContext>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `LocalStateContext`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `AeadEnvelopeParts` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:42:22
+   |
+42 |     assert_display::<AeadEnvelopeParts>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `AeadEnvelopeParts`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `RecoverySlotEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:43:22
+   |
+43 |     assert_display::<RecoverySlotEnvelope>();
+   |                      ^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `RecoverySlotEnvelope`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `DeviceSlotEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:44:22
+   |
+44 |     assert_display::<DeviceSlotEnvelope>();
+   |                      ^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `DeviceSlotEnvelope`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `MetadataEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:45:22
+   |
+45 |     assert_display::<MetadataEnvelope>();
+   |                      ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `MetadataEnvelope`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `TreeEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:46:22
+   |
+46 |     assert_display::<TreeEnvelope>();
+   |                      ^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `TreeEnvelope`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `ManifestEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:47:22
+   |
+47 |     assert_display::<ManifestEnvelope>();
+   |                      ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ManifestEnvelope`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `SnapshotEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:48:22
+   |
+48 |     assert_display::<SnapshotEnvelope>();
+   |                      ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `SnapshotEnvelope`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `HeadAuthenticator` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:49:22
+   |
+49 |     assert_display::<HeadAuthenticator>();
+   |                      ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `HeadAuthenticator`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`
+
+error[E0277]: `LocalStateAuthenticator` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/capability_display.rs:50:22
+   |
+50 |     assert_display::<LocalStateAuthenticator>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `LocalStateAuthenticator`
+   |
+note: required by a bound in `assert_display`
+  --> tests/compile_fail/capability_display.rs:14:22
+   |
+14 | fn assert_display<T: Display>() {}
+   |                      ^^^^^^^ required by this bound in `assert_display`

@@ -1,0 +1,11 @@
+error[E0616]: field `first` of struct `CompromiseRekeyConfirmation` is private
+ --> tests/compile_fail/compromise_confirmation_private_fields.rs:4:19
+  |
+4 |     let _ = value.first;
+  |                   ^^^^^ private field
+
+error[E0616]: field `matching` of struct `CompromiseRekeyConfirmation` is private
+ --> tests/compile_fail/compromise_confirmation_private_fields.rs:5:19
+  |
+5 |     let _ = value.matching;
+  |                   ^^^^^^^^ private field

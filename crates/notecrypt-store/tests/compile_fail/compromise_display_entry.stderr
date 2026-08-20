@@ -1,0 +1,8 @@
+error[E0277]: `AuthenticatedLogicalEntry` doesn't implement `std::fmt::Display`
+ --> tests/compile_fail/compromise_display_entry.rs:4:15
+  |
+4 |     println!("{entry}");
+  |               ^^^^^^^ `AuthenticatedLogicalEntry` cannot be formatted with the default formatter
+  |
+  = help: the trait `std::fmt::Display` is not implemented for `AuthenticatedLogicalEntry`
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead

@@ -1,0 +1,23 @@
+error[E0277]: `UnlockedVault` doesn't implement `Debug`
+ --> tests/compile_fail/local_debug.rs:6:21
+  |
+6 |     require_debug::<UnlockedVault>();
+  |                     ^^^^^^^^^^^^^ the trait `Debug` is not implemented for `UnlockedVault`
+  |
+note: required by a bound in `require_debug`
+ --> tests/compile_fail/local_debug.rs:3:21
+  |
+3 | fn require_debug<T: std::fmt::Debug>() {}
+  |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `UnlockedVaultLease` doesn't implement `Debug`
+ --> tests/compile_fail/local_debug.rs:7:21
+  |
+7 |     require_debug::<UnlockedVaultLease>();
+  |                     ^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `UnlockedVaultLease`
+  |
+note: required by a bound in `require_debug`
+ --> tests/compile_fail/local_debug.rs:3:21
+  |
+3 | fn require_debug<T: std::fmt::Debug>() {}
+  |                     ^^^^^^^^^^^^^^^ required by this bound in `require_debug`

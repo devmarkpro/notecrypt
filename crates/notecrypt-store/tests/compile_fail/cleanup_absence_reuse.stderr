@@ -1,0 +1,17 @@
+error[E0382]: use of moved value: `value`
+ --> tests/compile_fail/cleanup_absence_reuse.rs:7:13
+  |
+5 | fn reuse(value: WorkspaceAbsenceProof) {
+  |          ----- move occurs because `value` has type `WorkspaceAbsenceProof`, which does not implement the `Copy` trait
+6 |     consume(value);
+  |             ----- value moved here
+7 |     consume(value);
+  |             ^^^^^ value used here after move
+  |
+note: consider changing this parameter type in function `consume` to borrow instead if owning the value isn't necessary
+ --> tests/compile_fail/cleanup_absence_reuse.rs:3:15
+  |
+3 | fn consume(_: WorkspaceAbsenceProof) {}
+  |    -------    ^^^^^^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+  |    |
+  |    in this function

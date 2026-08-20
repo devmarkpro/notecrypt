@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `AuthenticatedLogicalEntry` in the current scope
+ --> tests/compile_fail/compromise_clone_entry.rs:4:19
+  |
+4 |     let _ = entry.clone();
+  |                   ^^^^^ method not found in `AuthenticatedLogicalEntry`

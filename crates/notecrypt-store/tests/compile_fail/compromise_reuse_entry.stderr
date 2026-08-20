@@ -1,0 +1,10 @@
+error[E0382]: use of moved value: `entry`
+  --> tests/compile_fail/compromise_reuse_entry.rs:12:40
+   |
+ 8 |     entry: AuthenticatedLogicalEntry,
+   |     ----- move occurs because `entry` has type `AuthenticatedLogicalEntry`, which does not implement the `Copy` trait
+...
+11 |     let _ = target.stage_entry(source, entry, cancel);
+   |                                        ----- value moved here
+12 |     let _ = target.stage_entry(source, entry, cancel);
+   |                                        ^^^^^ value used here after move

@@ -1,0 +1,23 @@
+[package]
+name = "notecrypt-editor-workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+test-support = ["notecrypt-platform-fs/test-support"]
+
+[dependencies]
+getrandom.workspace = true
+notecrypt-platform-fs.workspace = true
+notecrypt-service.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+notecrypt-platform-fs = { workspace = true, features = ["test-support"] }
+notecrypt-service = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

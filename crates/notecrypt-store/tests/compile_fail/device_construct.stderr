@@ -1,0 +1,17 @@
+error: cannot construct `ActiveDeviceSlot` with struct literal syntax due to private fields
+ --> tests/compile_fail/device_construct.rs:6:19
+  |
+6 |     let _active = ActiveDeviceSlot {};
+  |                   ^^^^^^^^^^^^^^^^
+
+error: cannot construct `DisabledDeviceSlotPendingProviderRemoval` with struct literal syntax due to private fields
+ --> tests/compile_fail/device_construct.rs:7:21
+  |
+7 |     let _disabled = DisabledDeviceSlotPendingProviderRemoval {};
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot construct `UntrustedDeviceSlotCandidate` with struct literal syntax due to private fields
+ --> tests/compile_fail/device_construct.rs:8:22
+  |
+8 |     let _candidate = UntrustedDeviceSlotCandidate {};
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

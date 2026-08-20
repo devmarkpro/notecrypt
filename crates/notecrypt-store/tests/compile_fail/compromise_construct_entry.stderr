@@ -1,0 +1,5 @@
+error: cannot construct `AuthenticatedLogicalEntry` with struct literal syntax due to private fields
+ --> tests/compile_fail/compromise_construct_entry.rs:4:13
+  |
+4 |     let _ = AuthenticatedLogicalEntry {};
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^

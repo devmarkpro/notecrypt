@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `VerifiedReachableHead: Eq` is not satisfied
+ --> tests/compile_fail/reachability_eq.rs:9:19
+  |
+9 |     requires_eq::<VerifiedReachableHead>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `VerifiedReachableHead`
+  |
+note: required by a bound in `requires_eq`
+ --> tests/compile_fail/reachability_eq.rs:6:19
+  |
+6 | fn requires_eq<T: Eq>() {}
+  |                   ^^ required by this bound in `requires_eq`
+
+error[E0277]: the trait bound `CommittedReachableHead: Eq` is not satisfied
+  --> tests/compile_fail/reachability_eq.rs:10:19
+   |
+10 |     requires_eq::<CommittedReachableHead>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `CommittedReachableHead`
+   |
+note: required by a bound in `requires_eq`
+  --> tests/compile_fail/reachability_eq.rs:6:19
+   |
+ 6 | fn requires_eq<T: Eq>() {}
+   |                   ^^ required by this bound in `requires_eq`
+
+error[E0277]: the trait bound `PendingRemotePublication: Eq` is not satisfied
+  --> tests/compile_fail/reachability_eq.rs:11:19
+   |
+11 |     requires_eq::<PendingRemotePublication>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `PendingRemotePublication`
+   |
+note: required by a bound in `requires_eq`
+  --> tests/compile_fail/reachability_eq.rs:6:19
+   |
+ 6 | fn requires_eq<T: Eq>() {}
+   |                   ^^ required by this bound in `requires_eq`
+
+error[E0277]: the trait bound `PendingUnprovableRemote: Eq` is not satisfied
+  --> tests/compile_fail/reachability_eq.rs:12:19
+   |
+12 |     requires_eq::<PendingUnprovableRemote>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `PendingUnprovableRemote`
+   |
+note: required by a bound in `requires_eq`
+  --> tests/compile_fail/reachability_eq.rs:6:19
+   |
+ 6 | fn requires_eq<T: Eq>() {}
+   |                   ^^ required by this bound in `requires_eq`

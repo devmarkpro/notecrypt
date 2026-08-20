@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `RegisteredWorkspace: Clone` is not satisfied
+ --> tests/compile_fail/cleanup_clone.rs:8:20
+  |
+8 |     assert_clone::<RegisteredWorkspace>();
+  |                    ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `RegisteredWorkspace`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/compile_fail/cleanup_clone.rs:5:20
+  |
+5 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ActiveWorkspace: Clone` is not satisfied
+ --> tests/compile_fail/cleanup_clone.rs:9:20
+  |
+9 |     assert_clone::<ActiveWorkspace>();
+  |                    ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ActiveWorkspace`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/compile_fail/cleanup_clone.rs:5:20
+  |
+5 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `AuthenticatedCleanupRecord: Clone` is not satisfied
+  --> tests/compile_fail/cleanup_clone.rs:10:20
+   |
+10 |     assert_clone::<AuthenticatedCleanupRecord>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `AuthenticatedCleanupRecord`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/cleanup_clone.rs:5:20
+   |
+ 5 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `WorkspaceAbsenceProof: Clone` is not satisfied
+  --> tests/compile_fail/cleanup_clone.rs:11:20
+   |
+11 |     assert_clone::<WorkspaceAbsenceProof>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `WorkspaceAbsenceProof`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/compile_fail/cleanup_clone.rs:5:20
+   |
+ 5 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`

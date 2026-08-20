@@ -1,0 +1,407 @@
+error[E0277]: `RecoveryPassphrase` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:17:20
+   |
+17 |     assert_debug::<RecoveryPassphrase>();
+   |                    ^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoveryPassphrase`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `RecoveryPhrase` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:18:20
+   |
+18 |     assert_debug::<RecoveryPhrase>();
+   |                    ^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoveryPhrase`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `VaultRootKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:19:20
+   |
+19 |     assert_debug::<VaultRootKey>();
+   |                    ^^^^^^^^^^^^ the trait `Debug` is not implemented for `VaultRootKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `RecoveryWrappingKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:20:20
+   |
+20 |     assert_debug::<RecoveryWrappingKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoveryWrappingKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `MetadataKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:21:20
+   |
+21 |     assert_debug::<MetadataKey>();
+   |                    ^^^^^^^^^^^ the trait `Debug` is not implemented for `MetadataKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `SnapshotAuthenticationKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:22:20
+   |
+22 |     assert_debug::<SnapshotAuthenticationKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `SnapshotAuthenticationKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ChunkFingerprintKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:23:20
+   |
+23 |     assert_debug::<ChunkFingerprintKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ChunkFingerprintKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ContentWrappingKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:24:20
+   |
+24 |     assert_debug::<ContentWrappingKey>();
+   |                    ^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ContentWrappingKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `LocalVerificationKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:25:20
+   |
+25 |     assert_debug::<LocalVerificationKey>();
+   |                    ^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `LocalVerificationKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DeviceWrappingKey` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:26:20
+   |
+26 |     assert_debug::<DeviceWrappingKey>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceWrappingKey`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `RecoverySlotPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:27:20
+   |
+27 |     assert_debug::<RecoverySlotPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoverySlotPlaintext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DeviceSlotPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:28:20
+   |
+28 |     assert_debug::<DeviceSlotPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceSlotPlaintext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `MetadataPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:29:20
+   |
+29 |     assert_debug::<MetadataPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `MetadataPlaintext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `TreePlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:30:20
+   |
+30 |     assert_debug::<TreePlaintext>();
+   |                    ^^^^^^^^^^^^^ the trait `Debug` is not implemented for `TreePlaintext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ManifestPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:31:20
+   |
+31 |     assert_debug::<ManifestPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ManifestPlaintext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `SnapshotPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:32:20
+   |
+32 |     assert_debug::<SnapshotPlaintext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `SnapshotPlaintext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ProtectedBytes` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:33:20
+   |
+33 |     assert_debug::<ProtectedBytes>();
+   |                    ^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ProtectedBytes`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `RecoverySlotContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:34:20
+   |
+34 |     assert_debug::<RecoverySlotContext>();
+   |                    ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoverySlotContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DeviceSlotContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:35:20
+   |
+35 |     assert_debug::<DeviceSlotContext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceSlotContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `MetadataContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:36:20
+   |
+36 |     assert_debug::<MetadataContext>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `MetadataContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `TreeContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:37:20
+   |
+37 |     assert_debug::<TreeContext>();
+   |                    ^^^^^^^^^^^ the trait `Debug` is not implemented for `TreeContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ManifestContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:38:20
+   |
+38 |     assert_debug::<ManifestContext>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ManifestContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `SnapshotContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:39:20
+   |
+39 |     assert_debug::<SnapshotContext>();
+   |                    ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `SnapshotContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `AuthenticatedHeadContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:40:20
+   |
+40 |     assert_debug::<AuthenticatedHeadContext>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `AuthenticatedHeadContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `LocalStateContext` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:41:20
+   |
+41 |     assert_debug::<LocalStateContext>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `LocalStateContext`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `AeadEnvelopeParts` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:42:20
+   |
+42 |     assert_debug::<AeadEnvelopeParts>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `AeadEnvelopeParts`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `RecoverySlotEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:43:20
+   |
+43 |     assert_debug::<RecoverySlotEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `RecoverySlotEnvelope`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `DeviceSlotEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:44:20
+   |
+44 |     assert_debug::<DeviceSlotEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `DeviceSlotEnvelope`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `MetadataEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:45:20
+   |
+45 |     assert_debug::<MetadataEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `MetadataEnvelope`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `TreeEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:46:20
+   |
+46 |     assert_debug::<TreeEnvelope>();
+   |                    ^^^^^^^^^^^^ the trait `Debug` is not implemented for `TreeEnvelope`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `ManifestEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:47:20
+   |
+47 |     assert_debug::<ManifestEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ManifestEnvelope`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `SnapshotEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:48:20
+   |
+48 |     assert_debug::<SnapshotEnvelope>();
+   |                    ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `SnapshotEnvelope`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `HeadAuthenticator` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:49:20
+   |
+49 |     assert_debug::<HeadAuthenticator>();
+   |                    ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `HeadAuthenticator`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`
+
+error[E0277]: `LocalStateAuthenticator` doesn't implement `Debug`
+  --> tests/compile_fail/capability_debug.rs:50:20
+   |
+50 |     assert_debug::<LocalStateAuthenticator>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `LocalStateAuthenticator`
+   |
+note: required by a bound in `assert_debug`
+  --> tests/compile_fail/capability_debug.rs:14:20
+   |
+14 | fn assert_debug<T: Debug>() {}
+   |                    ^^^^^ required by this bound in `assert_debug`

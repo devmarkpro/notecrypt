@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `VerifiedReachableHead: Default` is not satisfied
+ --> tests/compile_fail/reachability_default.rs:9:24
+  |
+9 |     requires_default::<VerifiedReachableHead>();
+  |                        ^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `VerifiedReachableHead`
+  |
+note: required by a bound in `requires_default`
+ --> tests/compile_fail/reachability_default.rs:6:24
+  |
+6 | fn requires_default<T: Default>() {}
+  |                        ^^^^^^^ required by this bound in `requires_default`
+
+error[E0277]: the trait bound `CommittedReachableHead: Default` is not satisfied
+  --> tests/compile_fail/reachability_default.rs:10:24
+   |
+10 |     requires_default::<CommittedReachableHead>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `CommittedReachableHead`
+   |
+note: required by a bound in `requires_default`
+  --> tests/compile_fail/reachability_default.rs:6:24
+   |
+ 6 | fn requires_default<T: Default>() {}
+   |                        ^^^^^^^ required by this bound in `requires_default`
+
+error[E0277]: the trait bound `PendingRemotePublication: Default` is not satisfied
+  --> tests/compile_fail/reachability_default.rs:11:24
+   |
+11 |     requires_default::<PendingRemotePublication>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `PendingRemotePublication`
+   |
+note: required by a bound in `requires_default`
+  --> tests/compile_fail/reachability_default.rs:6:24
+   |
+ 6 | fn requires_default<T: Default>() {}
+   |                        ^^^^^^^ required by this bound in `requires_default`
+
+error[E0277]: the trait bound `PendingUnprovableRemote: Default` is not satisfied
+  --> tests/compile_fail/reachability_default.rs:12:24
+   |
+12 |     requires_default::<PendingUnprovableRemote>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `PendingUnprovableRemote`
+   |
+note: required by a bound in `requires_default`
+  --> tests/compile_fail/reachability_default.rs:6:24
+   |
+ 6 | fn requires_default<T: Default>() {}
+   |                        ^^^^^^^ required by this bound in `requires_default`

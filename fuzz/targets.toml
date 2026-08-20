@@ -1,0 +1,42 @@
+toolchain = "nightly-2026-08-01"
+cargo_fuzz = "0.13.1"
+
+[[target]]
+name = "decode_header"
+tree = "format"
+project_dir = "fuzz/format"
+owner = "notecrypt-format"
+parser = "decode_bootstrap"
+bounds = "DecodeLimits::PHASE_1"
+
+[[target]]
+name = "decode_object"
+tree = "format"
+project_dir = "fuzz/format"
+owner = "notecrypt-format"
+parser = "decode_aead_object,decode_snapshot_object,decode_content_chunk,decode_head,decode_local_state"
+bounds = "DecodeLimits::PHASE_1"
+
+[[target]]
+name = "decode_manifest"
+tree = "format"
+project_dir = "fuzz/format"
+owner = "notecrypt-format"
+parser = "decode_content_payload,decode_manifest"
+bounds = "DecodeLimits::PHASE_1"
+
+[[target]]
+name = "decode_tree"
+tree = "format"
+project_dir = "fuzz/format"
+owner = "notecrypt-format"
+parser = "decode_tree"
+bounds = "DecodeLimits::PHASE_1"
+
+[[target]]
+name = "decode_snapshot"
+tree = "format"
+project_dir = "fuzz/format"
+owner = "notecrypt-format"
+parser = "decode_snapshot_payload,decode_head_payload,decode_local_state_payload"
+bounds = "DecodeLimits::PHASE_1"

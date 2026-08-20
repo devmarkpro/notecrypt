@@ -1,0 +1,71 @@
+[package]
+name = "notecrypt-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+benchmark-support = []
+test-support = []
+
+[dependencies]
+notecrypt-core.workspace = true
+notecrypt-crypto.workspace = true
+notecrypt-format.workspace = true
+notecrypt-platform-fs.workspace = true
+getrandom.workspace = true
+blake3.workspace = true
+minicbor.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+trybuild.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "transaction_faults"
+path = "tests/transaction_faults.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "chunk_revocation"
+path = "tests/chunk_revocation.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "cleanup_compile_fail"
+path = "tests/cleanup_compile_fail.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "cleanup_lifecycle"
+path = "tests/cleanup_lifecycle.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "device_compile_fail"
+path = "tests/device_compile_fail.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "device_slots"
+path = "tests/device_slots.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "reachability_tokens"
+path = "tests/reachability_tokens.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "rollback"
+path = "tests/rollback.rs"
+required-features = ["test-support"]

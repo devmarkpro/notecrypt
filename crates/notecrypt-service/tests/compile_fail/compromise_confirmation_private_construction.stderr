@@ -1,0 +1,9 @@
+error[E0451]: fields `first` and `matching` of struct `CompromiseRekeyConfirmation` are private
+  --> tests/compile_fail/compromise_confirmation_private_construction.rs:9:9
+   |
+ 8 |     CompromiseRekeyConfirmation {
+   |     --------------------------- in this type
+ 9 |         first: inaccessible::<RecoverySecretInput>(),
+   |         ^^^^^ private field
+10 |         matching: None,
+   |         ^^^^^^^^ private field

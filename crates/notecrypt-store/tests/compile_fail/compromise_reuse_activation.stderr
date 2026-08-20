@@ -1,0 +1,20 @@
+error[E0382]: use of moved value: `target`
+ --> tests/compile_fail/compromise_reuse_activation.rs:6:13
+  |
+3 | fn reuse(target: Box<dyn PendingVaultTarget>) {
+  |          ------ move occurs because `target` has type `Box<dyn PendingVaultTarget>`, which does not implement the `Copy` trait
+4 |     let cancel = std::sync::atomic::AtomicBool::new(false);
+5 |     let _ = target.activate(&cancel);
+  |                    ----------------- `target` moved due to this method call
+6 |     let _ = target.activate(&cancel);
+  |             ^^^^^^ value used here after move
+  |
+note: `activate` takes ownership of the receiver `self`, which moves `target`
+ --> src/compromise.rs
+  |
+  |     fn activate(self: Box<Self>, cancel: &AtomicBool) -> Result<ActivatedVaultTarget, StoreError>;
+  |                 ^^^^
+help: you could `clone` the value and consume it, if the following trait bounds could be satisfied: `dyn PendingVaultTarget: Sized` and `dyn PendingVaultTarget: Clone`
+  |
+5 |     let _ = target.clone().activate(&cancel);
+  |                   ++++++++

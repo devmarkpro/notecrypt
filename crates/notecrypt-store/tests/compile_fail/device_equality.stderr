@@ -1,0 +1,149 @@
+error[E0277]: the trait bound `DeviceEnrollment: Eq` is not satisfied
+  --> tests/compile_fail/device_equality.rs:10:23
+   |
+10 |     assert_equality::<DeviceEnrollment>();
+   |                       ^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `DeviceEnrollment`
+   |
+note: required by a bound in `assert_equality`
+  --> tests/compile_fail/device_equality.rs:7:23
+   |
+ 7 | fn assert_equality<T: Eq>() {}
+   |                       ^^ required by this bound in `assert_equality`
+
+error[E0277]: the trait bound `DeviceProvider: Eq` is not satisfied
+  --> tests/compile_fail/device_equality.rs:11:23
+   |
+11 |     assert_equality::<DeviceProvider>();
+   |                       ^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `DeviceProvider`
+   |
+note: required by a bound in `assert_equality`
+  --> tests/compile_fail/device_equality.rs:7:23
+   |
+ 7 | fn assert_equality<T: Eq>() {}
+   |                       ^^ required by this bound in `assert_equality`
+
+error[E0277]: the trait bound `DeviceReference: Eq` is not satisfied
+  --> tests/compile_fail/device_equality.rs:12:23
+   |
+12 |     assert_equality::<DeviceReference>();
+   |                       ^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `DeviceReference`
+   |
+note: required by a bound in `assert_equality`
+  --> tests/compile_fail/device_equality.rs:7:23
+   |
+ 7 | fn assert_equality<T: Eq>() {}
+   |                       ^^ required by this bound in `assert_equality`
+
+error[E0277]: the trait bound `ActiveDeviceSlot: Eq` is not satisfied
+  --> tests/compile_fail/device_equality.rs:13:23
+   |
+13 |     assert_equality::<ActiveDeviceSlot>();
+   |                       ^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `ActiveDeviceSlot`
+   |
+note: required by a bound in `assert_equality`
+  --> tests/compile_fail/device_equality.rs:7:23
+   |
+ 7 | fn assert_equality<T: Eq>() {}
+   |                       ^^ required by this bound in `assert_equality`
+
+error[E0277]: the trait bound `DisabledDeviceSlotPendingProviderRemoval: Eq` is not satisfied
+  --> tests/compile_fail/device_equality.rs:14:23
+   |
+14 |     assert_equality::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+   |
+note: required by a bound in `assert_equality`
+  --> tests/compile_fail/device_equality.rs:7:23
+   |
+ 7 | fn assert_equality<T: Eq>() {}
+   |                       ^^ required by this bound in `assert_equality`
+
+error[E0277]: the trait bound `UntrustedDeviceSlotCandidate: Eq` is not satisfied
+  --> tests/compile_fail/device_equality.rs:15:23
+   |
+15 |     assert_equality::<UntrustedDeviceSlotCandidate>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `UntrustedDeviceSlotCandidate`
+   |
+note: required by a bound in `assert_equality`
+  --> tests/compile_fail/device_equality.rs:7:23
+   |
+ 7 | fn assert_equality<T: Eq>() {}
+   |                       ^^ required by this bound in `assert_equality`
+
+error[E0277]: can't compare `DeviceEnrollment` with `DeviceEnrollment`
+  --> tests/compile_fail/device_equality.rs:16:31
+   |
+16 |     assert_partial_equality::<DeviceEnrollment>();
+   |                               ^^^^^^^^^^^^^^^^ no implementation for `DeviceEnrollment == DeviceEnrollment`
+   |
+   = help: the trait `PartialEq` is not implemented for `DeviceEnrollment`
+note: required by a bound in `assert_partial_equality`
+  --> tests/compile_fail/device_equality.rs:6:31
+   |
+ 6 | fn assert_partial_equality<T: PartialEq>() {}
+   |                               ^^^^^^^^^ required by this bound in `assert_partial_equality`
+
+error[E0277]: can't compare `DeviceProvider` with `DeviceProvider`
+  --> tests/compile_fail/device_equality.rs:17:31
+   |
+17 |     assert_partial_equality::<DeviceProvider>();
+   |                               ^^^^^^^^^^^^^^ no implementation for `DeviceProvider == DeviceProvider`
+   |
+   = help: the trait `PartialEq` is not implemented for `DeviceProvider`
+note: required by a bound in `assert_partial_equality`
+  --> tests/compile_fail/device_equality.rs:6:31
+   |
+ 6 | fn assert_partial_equality<T: PartialEq>() {}
+   |                               ^^^^^^^^^ required by this bound in `assert_partial_equality`
+
+error[E0277]: can't compare `DeviceReference` with `DeviceReference`
+  --> tests/compile_fail/device_equality.rs:18:31
+   |
+18 |     assert_partial_equality::<DeviceReference>();
+   |                               ^^^^^^^^^^^^^^^ no implementation for `DeviceReference == DeviceReference`
+   |
+   = help: the trait `PartialEq` is not implemented for `DeviceReference`
+note: required by a bound in `assert_partial_equality`
+  --> tests/compile_fail/device_equality.rs:6:31
+   |
+ 6 | fn assert_partial_equality<T: PartialEq>() {}
+   |                               ^^^^^^^^^ required by this bound in `assert_partial_equality`
+
+error[E0277]: can't compare `ActiveDeviceSlot` with `ActiveDeviceSlot`
+  --> tests/compile_fail/device_equality.rs:19:31
+   |
+19 |     assert_partial_equality::<ActiveDeviceSlot>();
+   |                               ^^^^^^^^^^^^^^^^ no implementation for `ActiveDeviceSlot == ActiveDeviceSlot`
+   |
+   = help: the trait `PartialEq` is not implemented for `ActiveDeviceSlot`
+note: required by a bound in `assert_partial_equality`
+  --> tests/compile_fail/device_equality.rs:6:31
+   |
+ 6 | fn assert_partial_equality<T: PartialEq>() {}
+   |                               ^^^^^^^^^ required by this bound in `assert_partial_equality`
+
+error[E0277]: can't compare `DisabledDeviceSlotPendingProviderRemoval` with `DisabledDeviceSlotPendingProviderRemoval`
+  --> tests/compile_fail/device_equality.rs:20:31
+   |
+20 |     assert_partial_equality::<DisabledDeviceSlotPendingProviderRemoval>();
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `DisabledDeviceSlotPendingProviderRemoval == DisabledDeviceSlotPendingProviderRemoval`
+   |
+   = help: the trait `PartialEq` is not implemented for `DisabledDeviceSlotPendingProviderRemoval`
+note: required by a bound in `assert_partial_equality`
+  --> tests/compile_fail/device_equality.rs:6:31
+   |
+ 6 | fn assert_partial_equality<T: PartialEq>() {}
+   |                               ^^^^^^^^^ required by this bound in `assert_partial_equality`
+
+error[E0277]: can't compare `UntrustedDeviceSlotCandidate` with `UntrustedDeviceSlotCandidate`
+  --> tests/compile_fail/device_equality.rs:21:31
+   |
+21 |     assert_partial_equality::<UntrustedDeviceSlotCandidate>();
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `UntrustedDeviceSlotCandidate == UntrustedDeviceSlotCandidate`
+   |
+   = help: the trait `PartialEq` is not implemented for `UntrustedDeviceSlotCandidate`
+note: required by a bound in `assert_partial_equality`
+  --> tests/compile_fail/device_equality.rs:6:31
+   |
+ 6 | fn assert_partial_equality<T: PartialEq>() {}
+   |                               ^^^^^^^^^ required by this bound in `assert_partial_equality`

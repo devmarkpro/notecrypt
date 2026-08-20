@@ -39,6 +39,9 @@ build/Release
 
 # Dependency directories
 node_modules/
+/fuzz/format/target/
+/fuzz/format/corpus/
+/fuzz/format/artifacts/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -141,3 +144,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Rust
+/target/
+/benches/target/
+/.b-swe/
+.DS_Store
+*.swp
+*.tmp

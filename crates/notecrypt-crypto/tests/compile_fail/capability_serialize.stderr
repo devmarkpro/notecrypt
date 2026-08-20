@@ -1,0 +1,815 @@
+error[E0277]: the trait bound `RecoveryPassphrase: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:16:24
+   |
+16 |     assert_serialize::<RecoveryPassphrase>();
+   |                        ^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `RecoveryPassphrase`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `RecoveryPassphrase` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `RecoveryPhrase: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:17:24
+   |
+17 |     assert_serialize::<RecoveryPhrase>();
+   |                        ^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `RecoveryPhrase`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `RecoveryPhrase` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `VaultRootKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:18:24
+   |
+18 |     assert_serialize::<VaultRootKey>();
+   |                        ^^^^^^^^^^^^ the trait `Serialize` is not implemented for `VaultRootKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `VaultRootKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `RecoveryWrappingKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:19:24
+   |
+19 |     assert_serialize::<RecoveryWrappingKey>();
+   |                        ^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `RecoveryWrappingKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `RecoveryWrappingKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `MetadataKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:20:24
+   |
+20 |     assert_serialize::<MetadataKey>();
+   |                        ^^^^^^^^^^^ the trait `Serialize` is not implemented for `MetadataKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `MetadataKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `SnapshotAuthenticationKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:21:24
+   |
+21 |     assert_serialize::<SnapshotAuthenticationKey>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `SnapshotAuthenticationKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `SnapshotAuthenticationKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ChunkFingerprintKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:22:24
+   |
+22 |     assert_serialize::<ChunkFingerprintKey>();
+   |                        ^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ChunkFingerprintKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ChunkFingerprintKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ContentWrappingKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:23:24
+   |
+23 |     assert_serialize::<ContentWrappingKey>();
+   |                        ^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ContentWrappingKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ContentWrappingKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `LocalVerificationKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:24:24
+   |
+24 |     assert_serialize::<LocalVerificationKey>();
+   |                        ^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `LocalVerificationKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `LocalVerificationKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DeviceWrappingKey: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:25:24
+   |
+25 |     assert_serialize::<DeviceWrappingKey>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceWrappingKey`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceWrappingKey` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `RecoverySlotPlaintext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:26:24
+   |
+26 |     assert_serialize::<RecoverySlotPlaintext>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `RecoverySlotPlaintext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `RecoverySlotPlaintext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DeviceSlotPlaintext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:27:24
+   |
+27 |     assert_serialize::<DeviceSlotPlaintext>();
+   |                        ^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceSlotPlaintext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceSlotPlaintext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `MetadataPlaintext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:28:24
+   |
+28 |     assert_serialize::<MetadataPlaintext>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `MetadataPlaintext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `MetadataPlaintext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `TreePlaintext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:29:24
+   |
+29 |     assert_serialize::<TreePlaintext>();
+   |                        ^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `TreePlaintext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `TreePlaintext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ManifestPlaintext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:30:24
+   |
+30 |     assert_serialize::<ManifestPlaintext>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ManifestPlaintext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ManifestPlaintext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `SnapshotPlaintext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:31:24
+   |
+31 |     assert_serialize::<SnapshotPlaintext>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `SnapshotPlaintext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `SnapshotPlaintext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ProtectedBytes: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:32:24
+   |
+32 |     assert_serialize::<ProtectedBytes>();
+   |                        ^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ProtectedBytes`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ProtectedBytes` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `RecoverySlotContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:33:24
+   |
+33 |     assert_serialize::<RecoverySlotContext>();
+   |                        ^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `RecoverySlotContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `RecoverySlotContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DeviceSlotContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:34:24
+   |
+34 |     assert_serialize::<DeviceSlotContext>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceSlotContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceSlotContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `MetadataContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:35:24
+   |
+35 |     assert_serialize::<MetadataContext>();
+   |                        ^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `MetadataContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `MetadataContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `TreeContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:36:24
+   |
+36 |     assert_serialize::<TreeContext>();
+   |                        ^^^^^^^^^^^ the trait `Serialize` is not implemented for `TreeContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `TreeContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ManifestContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:37:24
+   |
+37 |     assert_serialize::<ManifestContext>();
+   |                        ^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ManifestContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ManifestContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `SnapshotContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:38:24
+   |
+38 |     assert_serialize::<SnapshotContext>();
+   |                        ^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `SnapshotContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `SnapshotContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `AuthenticatedHeadContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:39:24
+   |
+39 |     assert_serialize::<AuthenticatedHeadContext>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `AuthenticatedHeadContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `AuthenticatedHeadContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `LocalStateContext: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:40:24
+   |
+40 |     assert_serialize::<LocalStateContext>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `LocalStateContext`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `LocalStateContext` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `AeadEnvelopeParts: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:41:24
+   |
+41 |     assert_serialize::<AeadEnvelopeParts>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `AeadEnvelopeParts`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `AeadEnvelopeParts` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `RecoverySlotEnvelope: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:42:24
+   |
+42 |     assert_serialize::<RecoverySlotEnvelope>();
+   |                        ^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `RecoverySlotEnvelope`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `RecoverySlotEnvelope` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `DeviceSlotEnvelope: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:43:24
+   |
+43 |     assert_serialize::<DeviceSlotEnvelope>();
+   |                        ^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `DeviceSlotEnvelope`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `DeviceSlotEnvelope` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `MetadataEnvelope: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:44:24
+   |
+44 |     assert_serialize::<MetadataEnvelope>();
+   |                        ^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `MetadataEnvelope`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `MetadataEnvelope` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `TreeEnvelope: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:45:24
+   |
+45 |     assert_serialize::<TreeEnvelope>();
+   |                        ^^^^^^^^^^^^ the trait `Serialize` is not implemented for `TreeEnvelope`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `TreeEnvelope` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `ManifestEnvelope: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:46:24
+   |
+46 |     assert_serialize::<ManifestEnvelope>();
+   |                        ^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `ManifestEnvelope`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `ManifestEnvelope` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `SnapshotEnvelope: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:47:24
+   |
+47 |     assert_serialize::<SnapshotEnvelope>();
+   |                        ^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `SnapshotEnvelope`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `SnapshotEnvelope` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `HeadAuthenticator: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:48:24
+   |
+48 |     assert_serialize::<HeadAuthenticator>();
+   |                        ^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `HeadAuthenticator`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `HeadAuthenticator` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`
+
+error[E0277]: the trait bound `LocalStateAuthenticator: serde::Serialize` is not satisfied
+  --> tests/compile_fail/capability_serialize.rs:49:24
+   |
+49 |     assert_serialize::<LocalStateAuthenticator>();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `LocalStateAuthenticator`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `LocalStateAuthenticator` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `assert_serialize`
+  --> tests/compile_fail/capability_serialize.rs:13:24
+   |
+13 | fn assert_serialize<T: Serialize>() {}
+   |                        ^^^^^^^^^ required by this bound in `assert_serialize`

@@ -1,0 +1,34 @@
+[package]
+name = "notecrypt-benches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+notecrypt-platform-fs = { workspace = true, features = ["benchmark-support"] }
+notecrypt-store = { workspace = true, features = ["benchmark-support"] }
+
+[dev-dependencies]
+blake3.workspace = true
+criterion.workspace = true
+notecrypt-crypto.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+[[bench]]
+name = "crypto"
+path = "src/crypto.rs"
+harness = false
+
+[[bench]]
+name = "store"
+path = "src/store.rs"
+harness = false
+
+[lints]
+workspace = true

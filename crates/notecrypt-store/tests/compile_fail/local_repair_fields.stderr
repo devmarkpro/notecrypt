@@ -1,0 +1,5 @@
+error[E0616]: field `keys` of struct `VaultRepair` is private
+ --> tests/compile_fail/local_repair_fields.rs:4:20
+  |
+4 |     let _ = repair.keys;
+  |                    ^^^^ private field

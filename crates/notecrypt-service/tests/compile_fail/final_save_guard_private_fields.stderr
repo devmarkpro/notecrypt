@@ -1,0 +1,23 @@
+error[E0616]: field `service` of struct `FinalSaveGuard` is private
+ --> tests/compile_fail/final_save_guard_private_fields.rs:4:19
+  |
+4 |     let _ = value.service;
+  |                   ^^^^^^^ private field
+
+error[E0616]: field `state` of struct `FinalSaveGuard` is private
+ --> tests/compile_fail/final_save_guard_private_fields.rs:5:19
+  |
+5 |     let _ = value.state;
+  |                   ^^^^^ private field
+
+error[E0616]: field `generation` of struct `FinalSaveGuard` is private
+ --> tests/compile_fail/final_save_guard_private_fields.rs:6:19
+  |
+6 |     let _ = value.generation;
+  |                   ^^^^^^^^^^ private field
+
+error[E0616]: field `armed` of struct `FinalSaveGuard` is private
+ --> tests/compile_fail/final_save_guard_private_fields.rs:7:19
+  |
+7 |     let _ = value.armed;
+  |                   ^^^^^ private field

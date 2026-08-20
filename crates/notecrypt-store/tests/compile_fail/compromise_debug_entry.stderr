@@ -1,0 +1,7 @@
+error[E0277]: `AuthenticatedLogicalEntry` doesn't implement `Debug`
+ --> tests/compile_fail/compromise_debug_entry.rs:4:15
+  |
+4 |     println!("{entry:?}");
+  |               ^^^^^^^^^ `AuthenticatedLogicalEntry` cannot be formatted using `{:?}` because it doesn't implement `Debug`
+  |
+  = help: the trait `Debug` is not implemented for `AuthenticatedLogicalEntry`

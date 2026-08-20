@@ -1,0 +1,115 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/plaintext_construct.rs:7:13
+  |
+7 |     let _ = RecoverySlotPlaintext(vec![0; 32]);
+  |             ^^^^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/aead.rs
+  |
+  |         pub struct $name(Vec<u8>);
+  |                          ^^^^^^^ private field
+...
+  | plaintext_type!(RecoverySlotPlaintext, exact RECOVERY_SLOT_LEN);
+  | --------------------------------------------------------------- in this macro invocation
+  = note: this error originates in the macro `plaintext_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: you might have meant to use the `from_root_key` associated function
+  |
+7 |     let _ = RecoverySlotPlaintext::from_root_key(vec![0; 32]);
+  |                                  +++++++++++++++
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/plaintext_construct.rs:8:13
+  |
+8 |     let _ = DeviceSlotPlaintext(vec![0; 32]);
+  |             ^^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/aead.rs
+  |
+  |         pub struct $name(Vec<u8>);
+  |                          ^^^^^^^ private field
+...
+  | plaintext_type!(DeviceSlotPlaintext, exact DEVICE_SLOT_LEN);
+  | ----------------------------------------------------------- in this macro invocation
+  = note: this error originates in the macro `plaintext_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: you might have meant to use the `from_root_key` associated function
+  |
+8 |     let _ = DeviceSlotPlaintext::from_root_key(vec![0; 32]);
+  |                                +++++++++++++++
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/plaintext_construct.rs:9:13
+  |
+9 |     let _ = MetadataPlaintext(vec![]);
+  |             ^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/aead.rs
+  |
+  |         pub struct $name(Vec<u8>);
+  |                          ^^^^^^^ private field
+...
+  | plaintext_type!(MetadataPlaintext, max METADATA_MAX_LEN);
+  | -------------------------------------------------------- in this macro invocation
+  = note: this error originates in the macro `plaintext_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/plaintext_construct.rs:10:13
+   |
+10 |     let _ = TreePlaintext(vec![]);
+   |             ^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(Vec<u8>);
+   |                          ^^^^^^^ private field
+...
+   | plaintext_type!(TreePlaintext, max TREE_MAX_LEN);
+   | ------------------------------------------------ in this macro invocation
+   = note: this error originates in the macro `plaintext_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/plaintext_construct.rs:11:13
+   |
+11 |     let _ = ManifestPlaintext(vec![]);
+   |             ^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(Vec<u8>);
+   |                          ^^^^^^^ private field
+...
+   | plaintext_type!(ManifestPlaintext, max MANIFEST_MAX_LEN);
+   | -------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `plaintext_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/plaintext_construct.rs:12:13
+   |
+12 |     let _ = SnapshotPlaintext(vec![]);
+   |             ^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   |         pub struct $name(Vec<u8>);
+   |                          ^^^^^^^ private field
+...
+   | plaintext_type!(SnapshotPlaintext, max SNAPSHOT_MAX_LEN);
+   | -------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `plaintext_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/plaintext_construct.rs:13:13
+   |
+13 |     let _ = ProtectedBytes(vec![]);
+   |             ^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/aead.rs
+   |
+   | pub struct ProtectedBytes(Vec<u8>);
+   |                           ^^^^^^^ private field

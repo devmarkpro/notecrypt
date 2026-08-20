@@ -1,0 +1,96 @@
+error[E0277]: the trait bound `CompromiseRekeyConfirmation: Clone` is not satisfied
+  --> tests/compile_fail/compromise_confirmation_traits.rs:14:21
+   |
+14 |     require_clone::<CompromiseRekeyConfirmation>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `CompromiseRekeyConfirmation`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:5:21
+   |
+ 5 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: `CompromiseRekeyConfirmation` doesn't implement `Debug`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:15:21
+   |
+15 |     require_debug::<CompromiseRekeyConfirmation>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `CompromiseRekeyConfirmation`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:6:21
+   |
+ 6 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `CompromiseRekeyConfirmation` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:16:23
+   |
+16 |     require_display::<CompromiseRekeyConfirmation>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `CompromiseRekeyConfirmation`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:7:23
+   |
+ 7 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: can't compare `CompromiseRekeyConfirmation` with `CompromiseRekeyConfirmation`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:17:26
+   |
+17 |     require_partial_eq::<CompromiseRekeyConfirmation>();
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `CompromiseRekeyConfirmation == CompromiseRekeyConfirmation`
+   |
+   = help: the trait `PartialEq` is not implemented for `CompromiseRekeyConfirmation`
+note: required by a bound in `require_partial_eq`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:8:26
+   |
+ 8 | fn require_partial_eq<T: PartialEq>() {}
+   |                          ^^^^^^^^^ required by this bound in `require_partial_eq`
+
+error[E0277]: the trait bound `CompromiseRekeyConfirmation: Eq` is not satisfied
+  --> tests/compile_fail/compromise_confirmation_traits.rs:18:18
+   |
+18 |     require_eq::<CompromiseRekeyConfirmation>();
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Eq` is not implemented for `CompromiseRekeyConfirmation`
+   |
+note: required by a bound in `require_eq`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:9:18
+   |
+ 9 | fn require_eq<T: Eq>() {}
+   |                  ^^ required by this bound in `require_eq`
+
+error[E0277]: the trait bound `CompromiseRekeyConfirmation: Default` is not satisfied
+  --> tests/compile_fail/compromise_confirmation_traits.rs:19:23
+   |
+19 |     require_default::<CompromiseRekeyConfirmation>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `CompromiseRekeyConfirmation`
+   |
+note: required by a bound in `require_default`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:10:23
+   |
+10 | fn require_default<T: Default>() {}
+   |                       ^^^^^^^ required by this bound in `require_default`
+
+error[E0277]: the trait bound `CompromiseRekeyConfirmation: serde::Serialize` is not satisfied
+  --> tests/compile_fail/compromise_confirmation_traits.rs:20:25
+   |
+20 |     require_serialize::<CompromiseRekeyConfirmation>();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `CompromiseRekeyConfirmation`
+   |
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `CompromiseRekeyConfirmation` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `require_serialize`
+  --> tests/compile_fail/compromise_confirmation_traits.rs:11:25
+   |
+11 | fn require_serialize<T: Serialize>() {}
+   |                         ^^^^^^^^^ required by this bound in `require_serialize`

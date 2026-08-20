@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `VerifiedReachableHead: Clone` is not satisfied
+ --> tests/compile_fail/reachability_clone.rs:9:22
+  |
+9 |     requires_clone::<VerifiedReachableHead>();
+  |                      ^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `VerifiedReachableHead`
+  |
+note: required by a bound in `requires_clone`
+ --> tests/compile_fail/reachability_clone.rs:6:22
+  |
+6 | fn requires_clone<T: Clone>() {}
+  |                      ^^^^^ required by this bound in `requires_clone`
+
+error[E0277]: the trait bound `CommittedReachableHead: Clone` is not satisfied
+  --> tests/compile_fail/reachability_clone.rs:10:22
+   |
+10 |     requires_clone::<CommittedReachableHead>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `CommittedReachableHead`
+   |
+note: required by a bound in `requires_clone`
+  --> tests/compile_fail/reachability_clone.rs:6:22
+   |
+ 6 | fn requires_clone<T: Clone>() {}
+   |                      ^^^^^ required by this bound in `requires_clone`
+
+error[E0277]: the trait bound `PendingRemotePublication: Clone` is not satisfied
+  --> tests/compile_fail/reachability_clone.rs:11:22
+   |
+11 |     requires_clone::<PendingRemotePublication>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `PendingRemotePublication`
+   |
+note: required by a bound in `requires_clone`
+  --> tests/compile_fail/reachability_clone.rs:6:22
+   |
+ 6 | fn requires_clone<T: Clone>() {}
+   |                      ^^^^^ required by this bound in `requires_clone`
+
+error[E0277]: the trait bound `PendingUnprovableRemote: Clone` is not satisfied
+  --> tests/compile_fail/reachability_clone.rs:12:22
+   |
+12 |     requires_clone::<PendingUnprovableRemote>();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `PendingUnprovableRemote`
+   |
+note: required by a bound in `requires_clone`
+  --> tests/compile_fail/reachability_clone.rs:6:22
+   |
+ 6 | fn requires_clone<T: Clone>() {}
+   |                      ^^^^^ required by this bound in `requires_clone`

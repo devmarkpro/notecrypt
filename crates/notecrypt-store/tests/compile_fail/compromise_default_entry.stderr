@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `default` found for struct `AuthenticatedLogicalEntry` in the current scope
+ --> tests/compile_fail/compromise_default_entry.rs:4:40
+  |
+4 |     let _ = AuthenticatedLogicalEntry::default();
+  |                                        ^^^^^^^ associated function or constant not found in `AuthenticatedLogicalEntry`

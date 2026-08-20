@@ -1,0 +1,521 @@
+error[E0277]: the trait bound `ChunkKeyWrapContext: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:14:21
+   |
+14 |     require_clone::<ChunkKeyWrapContext>();
+   |                     ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ChunkKeyWrapContext`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ContentChunkContext: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:15:21
+   |
+15 |     require_clone::<ContentChunkContext>();
+   |                     ^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ContentChunkContext`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ChunkFingerprintContext: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:16:21
+   |
+16 |     require_clone::<ChunkFingerprintContext>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ChunkFingerprintContext`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ChunkKeyPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:17:21
+   |
+17 |     require_clone::<ChunkKeyPlaintext>();
+   |                     ^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ChunkKeyPlaintext`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ContentChunkPlaintext: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:18:21
+   |
+18 |     require_clone::<ContentChunkPlaintext>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ContentChunkPlaintext`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ChunkKeyEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:19:21
+   |
+19 |     require_clone::<ChunkKeyEnvelope>();
+   |                     ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ChunkKeyEnvelope`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ContentChunkEnvelope: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:20:21
+   |
+20 |     require_clone::<ContentChunkEnvelope>();
+   |                     ^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ContentChunkEnvelope`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `ChunkFingerprint: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:21:21
+   |
+21 |     require_clone::<ChunkFingerprint>();
+   |                     ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ChunkFingerprint`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `EncryptedChunkDescriptor: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:22:21
+   |
+22 |     require_clone::<EncryptedChunkDescriptor>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `EncryptedChunkDescriptor`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: the trait bound `EncryptedChunk: Clone` is not satisfied
+  --> tests/compile_fail/chunk_envelope_debug.rs:23:21
+   |
+23 |     require_clone::<EncryptedChunk>();
+   |                     ^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `EncryptedChunk`
+   |
+note: required by a bound in `require_clone`
+  --> tests/compile_fail/chunk_envelope_debug.rs:9:21
+   |
+ 9 | fn require_clone<T: Clone>() {}
+   |                     ^^^^^ required by this bound in `require_clone`
+
+error[E0277]: `ChunkKeyWrapContext` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:24:21
+   |
+24 |     require_debug::<ChunkKeyWrapContext>();
+   |                     ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ChunkKeyWrapContext`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ContentChunkContext` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:25:21
+   |
+25 |     require_debug::<ContentChunkContext>();
+   |                     ^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ContentChunkContext`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ChunkFingerprintContext` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:26:21
+   |
+26 |     require_debug::<ChunkFingerprintContext>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ChunkFingerprintContext`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ChunkKeyPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:27:21
+   |
+27 |     require_debug::<ChunkKeyPlaintext>();
+   |                     ^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ChunkKeyPlaintext`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ContentChunkPlaintext` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:28:21
+   |
+28 |     require_debug::<ContentChunkPlaintext>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ContentChunkPlaintext`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ChunkKeyEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:29:21
+   |
+29 |     require_debug::<ChunkKeyEnvelope>();
+   |                     ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ChunkKeyEnvelope`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ContentChunkEnvelope` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:30:21
+   |
+30 |     require_debug::<ContentChunkEnvelope>();
+   |                     ^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ContentChunkEnvelope`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ChunkFingerprint` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:31:21
+   |
+31 |     require_debug::<ChunkFingerprint>();
+   |                     ^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `ChunkFingerprint`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `EncryptedChunkDescriptor` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:32:21
+   |
+32 |     require_debug::<EncryptedChunkDescriptor>();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `EncryptedChunkDescriptor`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `EncryptedChunk` doesn't implement `Debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:33:21
+   |
+33 |     require_debug::<EncryptedChunk>();
+   |                     ^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `EncryptedChunk`
+   |
+note: required by a bound in `require_debug`
+  --> tests/compile_fail/chunk_envelope_debug.rs:10:21
+   |
+10 | fn require_debug<T: Debug>() {}
+   |                     ^^^^^ required by this bound in `require_debug`
+
+error[E0277]: `ChunkKeyWrapContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:34:23
+   |
+34 |     require_display::<ChunkKeyWrapContext>();
+   |                       ^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ChunkKeyWrapContext`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ContentChunkContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:35:23
+   |
+35 |     require_display::<ContentChunkContext>();
+   |                       ^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ContentChunkContext`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ChunkFingerprintContext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:36:23
+   |
+36 |     require_display::<ChunkFingerprintContext>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ChunkFingerprintContext`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ChunkKeyPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:37:23
+   |
+37 |     require_display::<ChunkKeyPlaintext>();
+   |                       ^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ChunkKeyPlaintext`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ContentChunkPlaintext` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:38:23
+   |
+38 |     require_display::<ContentChunkPlaintext>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ContentChunkPlaintext`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ChunkKeyEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:39:23
+   |
+39 |     require_display::<ChunkKeyEnvelope>();
+   |                       ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ChunkKeyEnvelope`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ContentChunkEnvelope` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:40:23
+   |
+40 |     require_display::<ContentChunkEnvelope>();
+   |                       ^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ContentChunkEnvelope`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `ChunkFingerprint` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:41:23
+   |
+41 |     require_display::<ChunkFingerprint>();
+   |                       ^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `ChunkFingerprint`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `EncryptedChunkDescriptor` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:42:23
+   |
+42 |     require_display::<EncryptedChunkDescriptor>();
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `EncryptedChunkDescriptor`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0277]: `EncryptedChunk` doesn't implement `std::fmt::Display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:43:23
+   |
+43 |     require_display::<EncryptedChunk>();
+   |                       ^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `EncryptedChunk`
+   |
+note: required by a bound in `require_display`
+  --> tests/compile_fail/chunk_envelope_debug.rs:11:23
+   |
+11 | fn require_display<T: Display>() {}
+   |                       ^^^^^^^ required by this bound in `require_display`
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:45:13
+   |
+45 |     let _ = ChunkKeyWrapContext(todo!());
+   |             ^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | chunk_context_type!(ChunkKeyWrapContext, CHUNK_KEY_OBJECT_KIND);
+   | --------------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `chunk_context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unreachable call
+  --> tests/compile_fail/chunk_envelope_debug.rs:45:13
+   |
+45 |     let _ = ChunkKeyWrapContext(todo!());
+   |             ^^^^^^^^^^^^^^^^^^^ ------- any code following this expression is unreachable
+   |             |
+   |             unreachable call
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:46:13
+   |
+46 |     let _ = ContentChunkContext(todo!());
+   |             ^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   |         pub struct $name(PublicEnvelopeIdentity);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^ private field
+...
+   | chunk_context_type!(ContentChunkContext, CONTENT_CHUNK_OBJECT_KIND);
+   | ------------------------------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `chunk_context_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unreachable call
+  --> tests/compile_fail/chunk_envelope_debug.rs:46:13
+   |
+46 |     let _ = ContentChunkContext(todo!());
+   |             ^^^^^^^^^^^^^^^^^^^ ------- any code following this expression is unreachable
+   |             |
+   |             unreachable call
+
+error: cannot construct `ChunkFingerprintContext` with struct literal syntax due to private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:47:13
+   |
+47 |     let _ = ChunkFingerprintContext {};
+   |             ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: you might have meant to use the `profile_one` associated function
+   |
+47 -     let _ = ChunkFingerprintContext {};
+47 +     let _ = ChunkFingerprintContext::profile_one();
+   |
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:48:13
+   |
+48 |     let _ = ChunkKeyPlaintext(todo!());
+   |             ^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   | pub struct ChunkKeyPlaintext(SecretBox<[u8; CHUNK_KEY_BYTES]>);
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+warning: unreachable call
+  --> tests/compile_fail/chunk_envelope_debug.rs:48:13
+   |
+48 |     let _ = ChunkKeyPlaintext(todo!());
+   |             ^^^^^^^^^^^^^^^^^ ------- any code following this expression is unreachable
+   |             |
+   |             unreachable call
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:49:13
+   |
+49 |     let _ = ContentChunkPlaintext(Vec::new());
+   |             ^^^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   | pub struct ContentChunkPlaintext(Vec<u8>);
+   |                                  ^^^^^^^ private field
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:50:13
+   |
+50 |     let _ = ChunkKeyEnvelope(todo!());
+   |             ^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   |           pub struct $name(AeadEnvelopeParts);
+   |                            ^^^^^^^^^^^^^^^^^ private field
+...
+   | / chunk_envelope_type!(
+   | |     ChunkKeyEnvelope,
+   | |     CHUNK_KEY_OBJECT_KIND,
+   | |     exact CHUNK_KEY_BYTES
+   | | );
+   | |_- in this macro invocation
+   = note: this error originates in the macro `chunk_envelope_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unreachable call
+  --> tests/compile_fail/chunk_envelope_debug.rs:50:13
+   |
+50 |     let _ = ChunkKeyEnvelope(todo!());
+   |             ^^^^^^^^^^^^^^^^ ------- any code following this expression is unreachable
+   |             |
+   |             unreachable call
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:51:13
+   |
+51 |     let _ = ContentChunkEnvelope(todo!());
+   |             ^^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   |           pub struct $name(AeadEnvelopeParts);
+   |                            ^^^^^^^^^^^^^^^^^ private field
+...
+   | / chunk_envelope_type!(
+   | |     ContentChunkEnvelope,
+   | |     CONTENT_CHUNK_OBJECT_KIND,
+   | |     max MAX_CONTENT_CHUNK_BYTES
+   | | );
+   | |_- in this macro invocation
+   = note: this error originates in the macro `chunk_envelope_type` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unreachable call
+  --> tests/compile_fail/chunk_envelope_debug.rs:51:13
+   |
+51 |     let _ = ContentChunkEnvelope(todo!());
+   |             ^^^^^^^^^^^^^^^^^^^^ ------- any code following this expression is unreachable
+   |             |
+   |             unreachable call
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/chunk_envelope_debug.rs:52:13
+   |
+52 |     let _ = ChunkFingerprint([0; 32]);
+   |             ^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/stream.rs
+   |
+   | pub struct ChunkFingerprint([u8; 32]);
+   |                             ^^^^^^^^ private field

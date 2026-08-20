@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `repair`
+ --> tests/compile_fail/local_repair_reuse.rs:7:13
+  |
+5 | fn use_twice(repair: VaultRepair, cancel: &AtomicBool) {
+  |              ------ move occurs because `repair` has type `VaultRepair`, which does not implement the `Copy` trait
+6 |     let _ = repair.apply(VaultRepairAction::RebuildTrustedHead, cancel);
+  |                    ---------------------------------------------------- `repair` moved due to this method call
+7 |     let _ = repair.apply(VaultRepairAction::RebuildTrustedHead, cancel);
+  |             ^^^^^^ value used here after move
+  |
+note: `VaultRepair::apply` takes ownership of the receiver `self`, which moves `repair`
+ --> src/local.rs
+  |
+  |     pub fn apply(self, action: VaultRepairAction, cancel: &AtomicBool) -> Result<(), StoreError> {
+  |                  ^^^^
